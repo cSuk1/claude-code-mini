@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>Claude Code from Scratch</title>
+  <meta name="description" content="从零构建 Claude Code：1300 行代码的分步教程">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple.css">
+  <style>
+    :root {
+      --base-font-size: 15px;
+      --theme-color: #7c5cfc;
+      --sidebar-width: 260px;
+      --sidebar-nav-link-color--active: #7c5cfc;
+      --sidebar-nav-link-border-color--active: #7c5cfc;
+      --code-theme-background: #f6f8fa;
+      --code-inline-background: #f0f0f0;
+    }
+    .markdown-section h1 { border-bottom: 2px solid #7c5cfc; padding-bottom: 0.3em; }
+    .markdown-section table { display: table; width: 100%; }
+    .cover-main { max-width: 600px; }
+    .cover-main blockquote { font-size: 1em; color: #666; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'Claude Code from Scratch',
+      repo: 'https://github.com/Windy3f3f3f3f/claude-code-from-scratch',
+      loadSidebar: true,
+      subMaxLevel: 3,
+      auto2top: true,
+      search: {
+        placeholder: '搜索文档...',
+        noData: '没有找到结果',
+        depth: 3,
+      },
+      coverpage: true,
+      pagination: {
+        previousText: '上一篇',
+        nextText: '下一篇',
+        crossChapter: true,
+        crossChapterText: true,
+      },
+      markdown: {
+        renderer: {
+          code(code, lang) {
+            if (lang === 'mermaid') {
+              return '<div class="mermaid">' + code + '</div>';
+            }
+            return this.origin.code.apply(this, arguments);
+          }
+        }
+      },
+    }
+  </script>
+  <!-- Docsify core -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+  <!-- Plugins -->
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-pagination/dist/docsify-pagination.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-copy-code/dist/docsify-copy-code.min.js"></script>
+  <!-- Mermaid -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({ startOnLoad: false, theme: 'default' });
+    // Hook into Docsify lifecycle to render mermaid after each page load
+    window.$docsify.plugins = [
+      function(hook) {
+        hook.afterEach(function(html) {
+          return html;
+        });
+        hook.doneEach(function() {
+          document.querySelectorAll('.mermaid').forEach(function(el) {
+            if (el.getAttribute('data-processed')) return;
+            var code = el.textContent;
+            var id = 'mermaid-' + Math.random().toString(36).substr(2, 9);
+            try {
+              mermaid.render(id, code).then(function(result) {
+                el.innerHTML = result.svg;
+                el.setAttribute('data-processed', 'true');
+              });
+            } catch (e) {
+              console.warn('Mermaid render error:', e);
+            }
+          });
+        });
+      }
+    ];
+  </script>
+  <!-- Code highlight -->
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+</body>
+</html>

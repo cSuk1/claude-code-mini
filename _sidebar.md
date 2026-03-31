@@ -1,0 +1,13 @@
+- [首页](/)
+- [引言：为什么从零造？](docs/00-introduction.md)
+- **分步构建**
+  - [1. Agent Loop — 核心循环](docs/01-agent-loop.md)
+  - [2. 工具系统](docs/02-tools.md)
+  - [3. System Prompt 工程](docs/03-system-prompt.md)
+  - [4. 流式输出与双后端](docs/04-streaming.md)
+  - [5. 权限与安全](docs/05-safety.md)
+  - [6. 上下文管理](docs/06-context.md)
+  - [7. CLI、REPL 与会话](docs/07-cli-session.md)
+- **总结**
+  - [8. 架构对比与下一步](docs/08-whats-next.md)
+- [how-claude-code-works ↗](https://windy3f3f3f3f.github.io/how-claude-code-works/)
