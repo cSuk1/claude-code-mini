@@ -40,38 +40,50 @@ Claude Code 的入口是 `src/entrypoints/cli.tsx`——一个 **React/Ink TUI �
 // cli.ts — parseArgs
 
 interface ParsedArgs {
-  yolo: boolean;
+  permissionMode: PermissionMode;  // 5 种权限模式
   model: string;
   apiBase?: string;
-  apiKey?: string;
   prompt?: string;
   resume?: boolean;
   thinking?: boolean;
+  maxCost?: number;
+  maxTurns?: number;
 }
 
 function parseArgs(): ParsedArgs {
   const args = process.argv.slice(2);
-  let yolo = false;
+  let permissionMode: PermissionMode = "default";
   let thinking = false;
-  let model = "claude-sonnet-4-20250514";
+  let model = process.env.MINI_CLAUDE_MODEL || "claude-opus-4-6";
   let apiBase: string | undefined;
-  let apiKey: string | undefined;
   let resume = false;
+  let maxCost: number | undefined;
+  let maxTurns: number | undefined;
   const positional: string[] = [];
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--yolo" || args[i] === "-y") {
-      yolo = true;
+      permissionMode = "bypassPermissions";
+    } else if (args[i] === "--plan") {
+      permissionMode = "plan";
+    } else if (args[i] === "--accept-edits") {
+      permissionMode = "acceptEdits";
+    } else if (args[i] === "--dont-ask") {
+      permissionMode = "dontAsk";
     } else if (args[i] === "--thinking") {
       thinking = true;
     } else if (args[i] === "--model" || args[i] === "-m") {
       model = args[++i] || model;
     } else if (args[i] === "--api-base") {
       apiBase = args[++i];
-    } else if (args[i] === "--api-key") {
-      apiKey = args[++i];
     } else if (args[i] === "--resume") {
       resume = true;
+    } else if (args[i] === "--max-cost") {
+      const v = parseFloat(args[++i]);
+      if (!isNaN(v)) maxCost = v;
+    } else if (args[i] === "--max-turns") {
+      const v = parseInt(args[++i], 10);
+      if (!isNaN(v)) maxTurns = v;
     } else if (args[i] === "--help" || args[i] === "-h") {
       console.log(`Usage: mini-claude [options] [prompt] ...`);
       process.exit(0);
@@ -81,13 +93,13 @@ function parseArgs(): ParsedArgs {
   }
 
   return {
-    yolo, model, apiBase, apiKey, resume, thinking,
+    permissionMode, model, apiBase, resume, thinking, maxCost, maxTurns,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };
 }
 ```
 
-为什么不用 `commander.js`？因为我们只有 7 个参数，手写循环更简单、零依赖。Claude Code 用 commander 是因为它有几十个参数和子命令。
+为什么不用 `commander.js`？因为我们只有 11 个参数，手写循环更简单、零依赖。Claude Code 用 commander 是因为它有几十个参数和子命令。
 
 ### 两种运行模式
 
@@ -95,19 +107,18 @@ function parseArgs(): ParsedArgs {
 // cli.ts — main
 
 async function main() {
-  const { yolo, model, apiBase, apiKey, prompt, resume, thinking } = parseArgs();
+  const { permissionMode, model, apiBase, prompt, resume, thinking, maxCost, maxTurns } = parseArgs();
 
-  // API key 解析：--api-key > 环境变量
-  const resolvedApiKey =
-    apiKey ||
-    (apiBase ? process.env.OPENAI_API_KEY : process.env.ANTHROPIC_API_KEY);
+  // API key 解析：从环境变量获取（不支持命令行传递，避免泄露到 shell history）
+  // 优先级：OPENAI_API_KEY + OPENAI_BASE_URL → ANTHROPIC_API_KEY → OPENAI_API_KEY
+  const resolvedApiKey = resolveApiKey(apiBase);
 
   if (!resolvedApiKey) {
-    printError(`API key is required. Use --api-key or set env var.`);
+    printError(`API key is required. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var.`);
     process.exit(1);
   }
 
-  const agent = new Agent({ yolo, model, apiBase, apiKey: resolvedApiKey, thinking });
+  const agent = new Agent({ permissionMode, model, apiBase, apiKey: resolvedApiKey, thinking, maxCost, maxTurns });
 
   // 恢复会话
   if (resume) {
@@ -191,6 +202,12 @@ async function runRepl(agent: Agent) {
         catch (e: any) { printError(e.message); }
         askQuestion();
         return;
+      }
+      if (input === "/memory") { /* 列出所有记忆 */ askQuestion(); return; }
+      if (input === "/skills") { /* 列出可用技能 */ askQuestion(); return; }
+      if (input.startsWith("/")) {
+        // 技能调用：/<skill-name> [args]
+        // inline 模式 → 注入 prompt；fork 模式 → 启动子 Agent
       }
 
       // 正常对话
@@ -369,15 +386,15 @@ export function printToolResult(name: string, result: string) {
 
 | 维度 | Claude Code | mini-claude |
 |------|------------|-------------|
-| **参数解析** | commander.js（几十个参数） | 手写循环（7 个参数） |
+| **参数解析** | commander.js（几十个参数） | 手写循环（11 个参数） |
 | **UI 框架** | React/Ink TUI | chalk + console.log |
 | **REPL** | React 组件 + 事件系统 | readline + 递归 ask |
 | **会话格式** | JSONL（流式追加） | JSON（整体写入） |
 | **会话存储** | `~/.claude/projects/` | `~/.mini-claude/sessions/` |
 | **Ctrl+C** | 单按中断 / 双按退出 | 相同逻辑 |
-| **命令系统** | 丰富的 /command | /clear /cost /compact |
-| **代码量** | ~3000 行（入口 + UI） | ~280 行（cli.ts + ui.ts + session.ts） |
+| **命令系统** | 丰富的 /command | /clear /cost /compact /memory /skills /<skill> |
+| **代码量** | ~3000 行（入口 + UI） | ~586 行（cli.ts + ui.ts + session.ts） |
 
 ---
 
-> **下一章**：最后，我们来做一个全面的架构对比，看看 1300 行代码覆盖了 Claude Code 的哪些能力，以及还有哪些方向可以扩展。
+> **下一章**：记忆系统和技能系统——让你的 agent 拥有跨会话记忆和可复用的技能模板。

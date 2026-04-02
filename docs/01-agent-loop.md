@@ -110,21 +110,19 @@ private async chatAnthropic(userMessage: string): Promise<void> {
       const input = toolUse.input as Record<string, any>;
       printToolCall(toolUse.name, input);
 
-      // 权限检查（详见第 5 章）
-      if (!this.yolo) {
-        const confirmMsg = needsConfirmation(toolUse.name, input);
-        if (confirmMsg && !this.confirmedPaths.has(confirmMsg)) {
-          const confirmed = await this.confirmDangerous(confirmMsg);
-          if (!confirmed) {
-            toolResults.push({
-              type: "tool_result",
-              tool_use_id: toolUse.id,
-              content: "User denied this action.",
-            });
-            continue;  // 跳过被拒绝的工具
-          }
-          this.confirmedPaths.add(confirmMsg);
+      // 权限检查（详见第 5 章，5 种权限模式）
+      const confirmMsg = needsConfirmation(toolUse.name, input, this.permissionMode);
+      if (confirmMsg && !this.confirmedPaths.has(confirmMsg)) {
+        const confirmed = await this.confirmDangerous(confirmMsg);
+        if (!confirmed) {
+          toolResults.push({
+            type: "tool_result",
+            tool_use_id: toolUse.id,
+            content: "User denied this action.",
+          });
+          continue;  // 跳过被拒绝的工具
         }
+        this.confirmedPaths.add(confirmMsg);
       }
 
       // 执行工具并收集结果

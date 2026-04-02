@@ -10,7 +10,7 @@
 
 Claude Code 的开源快照有 50 万行 TypeScript，包含 66+ 工具、React/Ink TUI、MCP 协议、OAuth 认证、多代理系统等复杂功能。直接阅读源码，很难理清核心脉络。
 
-我们的做法是：**只保留造一个可用 coding agent 的最小必要组件**，用 ~1300 行代码复现核心能力。每一步都对照 Claude Code 真实源码讲解"它怎么做的 → 我们怎么简化的"。
+我们的做法是：**只保留造一个可用 coding agent 的最小必要组件**，用 ~3000 行代码复现核心能力及进阶特性（记忆、技能、多 Agent、权限规则、分级压缩、预算控制）。每一步都对照 Claude Code 真实源码讲解"它怎么做的 → 我们怎么简化的"。
 
 读完这个教程，你会理解：
 
@@ -32,24 +32,37 @@ graph TB
     Tools --> FS[文件读写]
     Tools --> Shell[Shell 命令]
     Tools --> Search[搜索工具]
+    Tools --> SkillTool[skill 工具]
+    Agent --> SubAgent[subagent.ts<br/>子 Agent]
+    SubAgent -.->|fork-return| Agent
+    Agent --> Memory[memory.ts<br/>记忆系统]
+    Prompt --> Memory
+    Prompt --> Skills[skills.ts<br/>技能系统]
     Agent --> Session[session.ts<br/>会话管理]
     Agent --> UI[ui.ts<br/>终端 UI]
 
     style Agent fill:#7c5cfc,color:#fff
     style Tools fill:#e8e0ff
     style CLI fill:#e8e0ff
+    style Memory fill:#ffe0e0
+    style Skills fill:#ffe0e0
+    style SubAgent fill:#e0ffe0
 ```
 
-**6 个文件，各司其职：**
+**11 个文件，各司其职：**
 
 | 文件 | 行数 | 职责 |
 |------|------|------|
-| `agent.ts` | ~575 | Agent 主循环：消息构造、API 调用、工具编排、上下文压缩 |
-| `tools.ts` | ~325 | 工具定义 + 执行：6 个工具 + 权限检查 |
-| `cli.ts` | ~215 | CLI 入口、参数解析、REPL 交互 |
-| `ui.ts` | ~103 | 终端输出：颜色、格式化 |
-| `prompt.ts` | ~65 | System Prompt 构造：模板 + 变量替换 |
-| `session.ts` | ~64 | 会话持久化：JSON 文件存储 |
+| `agent.ts` | ~1064 | Agent 主循环：消息构造、API 调用、工具编排、子 Agent、4 层上下文压缩、预算控制 |
+| `tools.ts` | ~667 | 工具定义 + 执行：8 个工具 + 5 种权限模式 + 引号容错 + diff 输出 |
+| `cli.ts` | ~336 | CLI 入口、参数解析、REPL 交互、技能/记忆命令、预算 flags |
+| `memory.ts` | ~205 | 记忆系统：4 类型 + 文件存储 + 关键词召回 |
+| `ui.ts` | ~187 | 终端输出：颜色、格式化、子 Agent 显示 |
+| `skills.ts` | ~175 | 技能系统：目录发现 + frontmatter 解析 + inline/fork 双模式 |
+| `subagent.ts` | ~172 | 子 Agent 类型配置（3 内置 + 自定义 Agent 发现） |
+| `prompt.ts` | ~76 | System Prompt 构造：模板 + 变量替换 + 记忆/技能/Agent 注入 |
+| `session.ts` | ~63 | 会话持久化：JSON 文件存储 |
+| `frontmatter.ts` | ~41 | 共享 YAML frontmatter 解析器 |
 
 ## 技术栈
 
@@ -90,7 +103,7 @@ npm start
   Mini Claude Code — A minimal coding agent
 
   Type your request, or 'exit' to quit.
-  Commands: /clear /cost /compact
+  Commands: /clear /cost /compact /memory /skills
 
 >
 ```
@@ -100,15 +113,19 @@ npm start
 ### 使用 OpenAI 兼容后端
 
 ```bash
-mini-claude --api-base https://api.openai.com/v1 --api-key sk-xxx --model gpt-4o "hello"
+OPENAI_API_KEY=sk-xxx mini-claude --api-base https://api.openai.com/v1 --model gpt-4o "hello"
 ```
 
 ### 其他选项
 
 ```bash
-mini-claude --yolo "run all tests"          # 跳过所有确认
-mini-claude --thinking "analyze this bug"    # 启用 Extended Thinking
-mini-claude --resume                         # 恢复上次会话
+mini-claude --yolo "run all tests"          # 跳过所有确认（bypassPermissions）
+mini-claude --plan "analyze this codebase"  # 只分析不修改（plan 模式）
+mini-claude --accept-edits "refactor"       # 自动批准文件编辑
+mini-claude --dont-ask "check style"        # CI 模式：需确认的操作自动拒绝
+mini-claude --thinking "analyze this bug"   # 启用 Extended Thinking
+mini-claude --resume                        # 恢复上次会话
+mini-claude --max-cost 0.50 --max-turns 20  # 预算控制
 ```
 
 ## 各章概览
@@ -122,7 +139,10 @@ mini-claude --resume                         # 恢复上次会话
 | [5. 权限与安全](docs/05-safety.md) | `tools.ts` 的 `needsConfirmation()` | `src/utils/permissions/` (52KB) |
 | [6. 上下文管理](docs/06-context.md) | `agent.ts` 的 `checkAndCompact()` | `src/services/compact/` |
 | [7. CLI 与会话](docs/07-cli-session.md) | `cli.ts` + `session.ts` | `src/entrypoints/cli.tsx` |
-| [8. 架构对比](docs/08-whats-next.md) | 全局对比 | 全局对比 |
+| [8. 记忆与技能](docs/08-memory-skills.md) | `memory.ts` + `skills.ts` | 记忆系统 + 技能系统 |
+| [9. 多 Agent](docs/09-multi-agent.md) | `subagent.ts` + `agent.ts` | `src/tools/AgentTool/` |
+| [10. 权限规则](docs/10-permission-rules.md) | `tools.ts` 权限规则 | `src/utils/permissions/` |
+| [11. 架构对比](docs/11-whats-next.md) | 全局对比 | 全局对比 |
 
 ---
 

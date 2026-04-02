@@ -46,14 +46,16 @@ private async callAnthropicStream(): Promise<Anthropic.Message> {
   return withRetry(async (signal) => {
     const createParams: any = {
       model: this.model,
-      max_tokens: this.thinking ? 16000 : 8096,
+      max_tokens: this.thinkingMode !== "disabled" ? maxOutput : 16384,
       system: this.systemPrompt,
       tools: toolDefinitions,
       messages: this.anthropicMessages,
     };
 
-    // Extended Thinking 支持
-    if (this.thinking) {
+    // Extended Thinking 支持（三种模式：adaptive / enabled / disabled）
+    if (this.thinkingMode === "enabled") {
+      createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
+    } else if (this.thinkingMode === "adaptive") {
       createParams.thinking = { type: "enabled", budget_tokens: 10000 };
     }
 
@@ -74,7 +76,7 @@ private async callAnthropicStream(): Promise<Anthropic.Message> {
     const finalMessage = await stream.finalMessage();
 
     // 过滤 thinking blocks（不存入历史）
-    if (this.thinking) {
+    if (this.thinkingMode !== "disabled") {
       finalMessage.content = finalMessage.content.filter(
         (block: any) => block.type !== "thinking"
       );
@@ -102,7 +104,7 @@ private async callOpenAIStream(): Promise<OpenAI.ChatCompletion> {
   return withRetry(async (signal) => {
     const stream = await this.openaiClient!.chat.completions.create({
       model: this.model,
-      max_tokens: 8096,
+      max_tokens: 16384,
       tools: toOpenAITools(),
       messages: this.openaiMessages,
       stream: true,
@@ -262,23 +264,35 @@ async function withRetry<T>(
 
 ### Extended Thinking
 
-Anthropic 独有的 Extended Thinking 让模型在回答前进行深度推理：
+Anthropic 独有的 Extended Thinking 让模型在回答前进行深度推理。我们支持三种模式：
+
+- **adaptive**：4.6 模型（opus-4-6、sonnet-4-6）自动启用，budget 较小（10000 tokens）
+- **enabled**：通过 `--thinking` flag 显式启用，budget 为 maxOutput - 1
+- **disabled**：非 Claude 模型或 Claude 3.x 自动禁用
 
 ```typescript
-// 构造参数时启用
-if (this.thinking) {
+// 模式判断
+function resolveThinkingMode(model: string, thinkingFlag: boolean): "adaptive" | "enabled" | "disabled" {
+  if (!modelSupportsThinking(model)) return "disabled";
+  if (thinkingFlag) return "enabled";
+  if (modelSupportsAdaptiveThinking(model)) return "adaptive";
+  return "disabled";
+}
+
+// 构造参数时根据模式设置不同 budget
+if (this.thinkingMode === "enabled") {
+  createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
+} else if (this.thinkingMode === "adaptive") {
   createParams.thinking = { type: "enabled", budget_tokens: 10000 };
 }
 
 // 响应中过滤 thinking blocks（不存入历史，避免浪费上下文）
-if (this.thinking) {
-  finalMessage.content = finalMessage.content.filter(
-    (block: any) => block.type !== "thinking"
-  );
-}
+finalMessage.content = finalMessage.content.filter(
+  (block: any) => block.type !== "thinking"
+);
 ```
 
-通过 `--thinking` flag 启用，适合复杂任务。
+streaming 过程中 thinking 内容会以暗色显示，让用户看到模型的推理过程。
 
 ## 简化对比
 

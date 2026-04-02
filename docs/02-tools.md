@@ -211,6 +211,51 @@ function editFile(input: {
 
 这比"按行号编辑"更可靠：行号在多步编辑中会变化，但字符串内容不会歧义。
 
+#### 进阶：引号容错 + Diff 输出
+
+Claude Code 的 `FileEditTool` 有 14 步验证流水线，其中一个重要步骤是**引号标准化**——模型输出中经常出现 curly quotes（`""`），但源码用的是 straight quotes（`""`）。我们实现了同样的容错机制：
+
+```typescript
+// tools.ts — 引号标准化
+
+function normalizeQuotes(s: string): string {
+  return s
+    .replace(/[\u2018\u2019\u2032]/g, "'")   // curly single → straight
+    .replace(/[\u201C\u201D\u2033]/g, '"');   // curly double → straight
+}
+
+function findActualString(fileContent: string, searchString: string): string | null {
+  // 先尝试精确匹配
+  if (fileContent.includes(searchString)) return searchString;
+  // Fallback: 标准化后匹配
+  const normSearch = normalizeQuotes(searchString);
+  const normFile = normalizeQuotes(fileContent);
+  const idx = normFile.indexOf(normSearch);
+  if (idx !== -1) return fileContent.substring(idx, idx + searchString.length);
+  return null;
+}
+```
+
+编辑成功后，生成简易 diff 输出，显示变更行号和修改内容：
+
+```typescript
+function generateDiff(oldContent, newContent, oldString, newString): string {
+  const lineNum = (oldContent.split(oldString)[0].match(/\n/g) || []).length + 1;
+  // @@ -lineNum,oldLines +lineNum,newLines @@
+  // - old lines
+  // + new lines
+}
+```
+
+输出示例：
+```
+Successfully edited src/app.ts (matched via quote normalization)
+
+@@ -15,1 +15,1 @@
+- const msg = "hello";
++ const msg = "world";
+```
+
 #### write_file — 写文件
 
 ```typescript
@@ -302,14 +347,15 @@ function truncateResult(result: string): string {
 
 | 维度 | Claude Code | mini-claude |
 |------|------------|-------------|
-| **工具数量** | 66+ | 6 |
+| **工具数量** | 66+ | 8（6 核心 + skill + agent） |
 | **工具定义** | 每个是一个 class，有 4 个方法 | 静态 JSON schema 数组 |
 | **工具分发** | 注册表 + 依赖注入 | switch 语句 |
 | **执行模式** | StreamingToolExecutor 并发 | 串行 for 循环 |
 | **搜索引擎** | ripgrep（rg） | 系统 grep |
+| **编辑验证** | 14 步流水线 | 引号容错 + 唯一性 + diff 输出 |
 | **Shell 安全** | AST 解析 + 沙箱 | 正则匹配 + 确认 |
 | **结果截断** | 选择性裁剪 | 保留头尾 50K |
-| **代码量** | ~10000 行（所有工具） | ~325 行 |
+| **代码量** | ~10000 行（所有工具） | ~667 行 |
 
 ---
 

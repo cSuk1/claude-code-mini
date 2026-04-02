@@ -21,7 +21,7 @@ graph TB
 
 ## Claude Code 怎么做的
 
-Claude Code 有一套 **5 层防御体系**：
+Claude Code 有一套 **7 层防御体系**（5 外部 + 2 内部），这里只列核心的 5 层：
 
 ### 1. System Prompt 层
 在 prompt 中明确禁止特定行为（"NEVER run git push --force to main"）。
@@ -57,12 +57,13 @@ function analyzeCommand(cmd: string): SecurityAssessment {
 
 我们把 5 层简化为 **3 个组件**：
 
-### 1. 危险命令检测：10 个正则
+### 1. 危险命令检测：16 个正则（含 6 个 Windows 专用）
 
 ```typescript
 // tools.ts — 危险命令模式
 
 const DANGEROUS_PATTERNS = [
+  // Unix/通用
   /\brm\s/,                              // rm 删除
   /\bgit\s+(push|reset|clean|checkout\s+\.)/, // git 破坏性操作
   /\bsudo\b/,                             // 提权
@@ -73,6 +74,13 @@ const DANGEROUS_PATTERNS = [
   /\bpkill\b/,                            // 批量杀进程
   /\breboot\b/,                           // 重启
   /\bshutdown\b/,                         // 关机
+  // Windows 专用
+  /\bdel\s/i,                             // Windows 删除文件
+  /\brmdir\s/i,                           // Windows 删除目录
+  /\bformat\s/i,                          // Windows 格式化磁盘
+  /\btaskkill\s/i,                        // Windows 杀进程
+  /\bRemove-Item\s/i,                     // PowerShell 删除
+  /\bStop-Process\s/i,                    // PowerShell 杀进程
 ];
 
 export function isDangerous(command: string): boolean {
@@ -122,23 +130,21 @@ export function needsConfirmation(
 // Agent 类成员
 private confirmedPaths: Set<string> = new Set();
 
-// 在工具执行前检查
-if (!this.yolo) {
-  const confirmMsg = needsConfirmation(toolUse.name, input);
-  if (confirmMsg && !this.confirmedPaths.has(confirmMsg)) {
-    // 弹出确认提示
-    const confirmed = await this.confirmDangerous(confirmMsg);
-    if (!confirmed) {
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: toolUse.id,
-        content: "User denied this action.",
-      });
-      continue;  // 跳过这个工具，但不中断整个循环
-    }
-    // 记住用户的授权
-    this.confirmedPaths.add(confirmMsg);
+// 在工具执行前检查（5 种权限模式：default/plan/acceptEdits/bypassPermissions/dontAsk）
+const confirmMsg = needsConfirmation(toolUse.name, input, this.permissionMode);
+if (confirmMsg && !this.confirmedPaths.has(confirmMsg)) {
+  // 弹出确认提示
+  const confirmed = await this.confirmDangerous(confirmMsg);
+  if (!confirmed) {
+    toolResults.push({
+      type: "tool_result",
+      tool_use_id: toolUse.id,
+      content: "User denied this action.",
+    });
+    continue;  // 跳过这个工具，但不中断整个循环
   }
+  // 记住用户的授权
+  this.confirmedPaths.add(confirmMsg);
 }
 ```
 
@@ -146,7 +152,7 @@ if (!this.yolo) {
 
 - **`confirmedPaths` 是 Set**：同一个操作只确认一次
 - **"User denied" 作为工具结果**：而不是抛错或中断循环。LLM 看到 denied 后会调整策略
-- **`--yolo` 跳过所有检查**：通过 `if (!this.yolo)` 实现
+- **`--yolo` 跳过所有检查**：`permissionMode === "bypassPermissions"` 时 `needsConfirmation` 直接返回 null
 
 ### 确认对话框的实现
 
@@ -170,45 +176,105 @@ private async confirmDangerous(command: string): Promise<boolean> {
 
 用临时的 readline 接口实现，避免与 REPL 的 readline 冲突。
 
-### --yolo 模式
+### 5 种权限模式
 
-```bash
-mini-claude --yolo "delete all .tmp files and rebuild"
-```
-
-在 `Agent` 构造函数中：
+Claude Code 有 5 种权限模式，我们全部实现了：
 
 ```typescript
-constructor(options: AgentOptions = {}) {
-  this.yolo = options.yolo || false;
-  // ...
+// tools.ts
+export type PermissionMode = "default" | "plan" | "acceptEdits" | "bypassPermissions" | "dontAsk";
+```
+
+| 模式 | 读工具 | 编辑工具 | Shell（安全） | Shell（危险） | 适用场景 |
+|------|--------|----------|-------------|-------------|---------|
+| `default` | ✅ allow | ⚠️ confirm(新文件) | ✅ allow | ⚠️ confirm | 日常使用 |
+| `plan` | ✅ allow | ❌ **deny** | ✅ allow | ⚠️ confirm | 只规划不执行 |
+| `acceptEdits` | ✅ allow | ✅ **allow** | ✅ allow | ⚠️ confirm | 信任编辑 |
+| `bypassPermissions` | ✅ allow | ✅ allow | ✅ allow | ✅ allow | 全信任（--yolo） |
+| `dontAsk` | ✅ allow | ❌ **deny** | ✅ allow | ❌ **deny** | CI/非交互 |
+
+```typescript
+// tools.ts — checkPermission 中的模式处理
+
+export function checkPermission(
+  toolName: string,
+  input: Record<string, any>,
+  mode: PermissionMode = "default"
+): { action: "allow" | "deny" | "confirm"; message?: string } {
+  // bypassPermissions: allow everything
+  if (mode === "bypassPermissions") return { action: "allow" };
+
+  // 读工具在所有模式下都安全
+  if (READ_TOOLS.has(toolName)) return { action: "allow" };
+
+  // plan 模式: 阻止所有编辑工具（不只靠 prompt，权限层也强制执行）
+  if (mode === "plan" && EDIT_TOOLS.has(toolName)) {
+    return { action: "deny", message: `Blocked in plan mode: ${toolName}` };
+  }
+
+  // acceptEdits: 文件编辑自动放行
+  if (mode === "acceptEdits" && EDIT_TOOLS.has(toolName)) {
+    return { action: "allow" };
+  }
+
+  // ... 内置危险检查 ...
+
+  // dontAsk: 需确认的直接拒绝（适用于 CI 环境）
+  if (needsConfirm && mode === "dontAsk") {
+    return { action: "deny", message: `Auto-denied (dontAsk mode): ${confirmMessage}` };
+  }
 }
 ```
 
-`--yolo` 适合你完全信任 agent 的场景（比如在容器中运行、或者处理低风险任务）。
+CLI 对应的 flags：
+
+```bash
+mini-claude --yolo "..."           # bypassPermissions
+mini-claude --plan "..."           # plan mode: 只分析不修改
+mini-claude --accept-edits "..."   # acceptEdits: 自动批准编辑
+mini-claude --dont-ask "..."       # dontAsk: CI 模式
+```
+
+**`plan` 模式的额外行为**：除了权限限制，还会在 system prompt 中注入提示 "You are in PLAN mode. Describe what changes you would make, but do NOT execute any write operations."
+
+**`dontAsk` 的设计意义**：在 CI/CD 管道中运行时，没有用户来回答确认问题。`dontAsk` 让任何需要确认的操作直接失败，agent 看到 denied 后会调整策略（比如用更安全的方式完成任务）。
+
+### 权限规则：.claude/settings.json
+
+除了内置模式，还支持配置化的 allow/deny 规则（详见第 10 章）：
+
+```json
+{
+  "permissions": {
+    "allow": ["read_file", "run_shell(npm test*)"],
+    "deny": ["run_shell(rm -rf*)"]
+  }
+}
+```
+
+**优先级**：deny 规则 > allow 规则 > 模式逻辑 > 内置危险检测。
 
 ## 安全模型的局限性
 
-我们的安全机制是**最低限度的**：
+我们的安全机制相比 Claude Code 仍有简化：
 
 1. **正则匹配 vs AST 分析**：`rm -rf /` 能捕获，但 `find / -delete` 捕获不了
 2. **没有沙箱**：命令在当前用户权限下执行
-3. **没有持久化配置**：每次启动重新确认
-4. **没有命令白名单**：不能预先授权 "npm test 永远允许"
+3. **没有 bypass-immune**：Claude Code 中某些危险路径（.git/、.ssh/）即使在 bypass 模式也需要确认
 
-这些都是 Claude Code 解决了但我们刻意省略的——对于教学目的和个人使用，这个安全级别够用了。
+但核心架构已对齐——5 种权限模式 + 配置化规则 + 内置检测，层次清晰。
 
 ## 简化对比
 
 | 维度 | Claude Code | mini-claude |
 |------|------------|-------------|
-| **防御层次** | 5 层 | 3 层 |
-| **命令分析** | AST 解析 | 正则匹配 |
-| **权限模式** | default / auto / bypass | 默认 / --yolo |
-| **白名单** | 持久化配置文件 | 会话级 Set |
-| **工具种类** | 每个工具有独立权限规则 | 3 种工具需要确认 |
-| **沙箱** | 支持沙箱执行 | 无 |
-| **代码量** | ~52KB（permissions.ts 一个文件） | ~40 行 |
+| **防御层次** | 7 层 | 4 层（模式 + 规则 + 检测 + 确认） |
+| **命令分析** | AST 解析（23 项检查） | 正则匹配（10 模式） |
+| **权限模式** | 5 种 + 2 内部 | 5 种（default/plan/acceptEdits/bypass/dontAsk） |
+| **权限规则** | 8 源优先级 + 3 种匹配 | 2 源（用户 + 项目）+ 前缀匹配 |
+| **白名单** | 持久化 + 会话级 | 会话级 Set |
+| **沙箱** | macOS Seatbelt / Linux namespace | 无 |
+| **代码量** | ~52KB（permissions.ts 一个文件） | ~120 行 |
 
 ---
 

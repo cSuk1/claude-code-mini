@@ -8,6 +8,10 @@
   - [5. 权限与安全](docs/05-safety.md)
   - [6. 上下文管理](docs/06-context.md)
   - [7. CLI、REPL 与会话](docs/07-cli-session.md)
+- **进阶能力**
+  - [8. 记忆系统与技能系统](docs/08-memory-skills.md)
+  - [9. 多 Agent 架构](docs/09-multi-agent.md)
+  - [10. 权限规则系统](docs/10-permission-rules.md)
 - **总结**
-  - [8. 架构对比与下一步](docs/08-whats-next.md)
+  - [11. 架构对比与下一步](docs/11-whats-next.md)
 - [how-claude-code-works ↗](https://windy3f3f3f3f.github.io/how-claude-code-works/)
