@@ -1,9 +1,10 @@
 import * as readline from "readline";
 import chalk from "chalk";
 import { Agent } from "../core/agent.js";
-import { printWelcome, printError, printInfo } from "../ui/ui.js";
+import { printWelcome, printError, printInfo, showMenu } from "../ui/ui.js";
 import { discoverSkills, resolveSkillPrompt, getSkillByName, executeSkill } from "../extensions/skills.js";
 import { CommandRegistry, registerBuiltinCommands } from "./commands.js";
+import { generatePermissionRule, savePermissionRule } from "../tools/tools.js";
 
 // The prompt string — must match what readline knows about so cursor math works.
 const PROMPT = "\n" + chalk.bold.cyan("> ");
@@ -65,13 +66,42 @@ export async function runRepl(agent: Agent) {
   // position after tab-completion and Ctrl+C redraws.
   rl.setPrompt(PROMPT);
 
-  // Provide confirmFn that reuses this readline instance
-  agent.setConfirmFn((_message: string) => {
-    return new Promise((resolve) => {
-      rl.question("  Allow? (y/n): ", (answer) => {
-        resolve(answer.toLowerCase().startsWith("y"));
-      });
-    });
+  // Provide confirmFn with interactive menu
+  agent.setConfirmFn(async (toolName: string, input: Record<string, any>) => {
+    // Pause readline to avoid conflicts with raw mode
+    rl.pause();
+
+    const options = [
+      { label: "Allow (this time only)", value: "allow" },
+      { label: "Allow, and remember for this project", value: "allow-remember" },
+      { label: "Deny (this time only)", value: "deny" },
+      { label: "Deny, and always deny for this project", value: "deny-remember" },
+    ];
+
+    const choice = await showMenu("Allow this action? [↑/↓ + Enter]", options);
+
+    rl.resume();
+
+    if (choice === "allow-remember") {
+      const rule = generatePermissionRule(toolName, input);
+      savePermissionRule(rule, "allow");
+      printInfo(`Allowed & remembered: ${rule}`);
+      return "allow";
+    }
+
+    if (choice === "deny-remember") {
+      const rule = generatePermissionRule(toolName, input);
+      savePermissionRule(rule, "deny");
+      printInfo(`Denied & remembered: ${rule}`);
+      return "deny";
+    }
+
+    if (choice === "allow") {
+      return "allow";
+    }
+
+    // null (Ctrl+C / Escape) or "deny"
+    return "deny";
   });
 
   // Ctrl+C handling

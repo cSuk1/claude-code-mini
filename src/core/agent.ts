@@ -1,7 +1,7 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import chalk from "chalk";
-import { toolDefinitions, executeTool, checkPermission, type ToolDef, type PermissionMode } from "../tools/tools.js";
+import { toolDefinitions, executeTool, checkPermission, savePermissionRule, generatePermissionRule, type ToolDef, type PermissionMode } from "../tools/tools.js";
 import { getContextWindow, isInternalModel, modelSupportsAdaptiveThinking, modelSupportsThinking, getMaxOutputTokens } from "./agent-model.js";
 import { withRetry } from "./agent-retry.js";
 import {
@@ -19,7 +19,6 @@ import {
   printError,
   printConfirmation,
   printDivider,
-  printCost,
   printRetry,
   printInfo,
   printSubAgentStart,
@@ -28,11 +27,12 @@ import {
   stopSpinner,
   flushMarkdown,
   resetMarkdown,
+  showMenu,
 } from "../ui/ui.js";
 import { saveSession } from "../storage/session.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
 import { getSubAgentConfig, BUILTIN_AGENT_TYPES, type SubAgentType } from "../extensions/subagent.js";
-import * as readline from "readline";
+
 import { getModelForTier, resolveSubAgentModel } from "./model-tiers.js";
 import { randomUUID } from "crypto";
 
@@ -59,9 +59,8 @@ interface AgentOptions {
   anthropicBaseURL?: string;  // Anthropic base URL (e.g. proxy)
   apiKey?: string;
   thinking?: boolean;
-  maxCostUsd?: number;        // Budget: max USD spend
   maxTurns?: number;          // Budget: max agentic turns
-  confirmFn?: (message: string) => Promise<boolean>; // External confirmation callback
+  confirmFn?: (toolName: string, input: Record<string, any>) => Promise<"allow" | "deny">;
   // Sub-agent options
   customSystemPrompt?: string;
   customTools?: ToolDef[];
@@ -87,7 +86,6 @@ export class Agent {
   private isSubAgent: boolean;
 
   // Budget control
-  private maxCostUsd?: number;
   private maxTurns?: number;
   private currentTurns = 0;
 
@@ -101,7 +99,7 @@ export class Agent {
   private confirmedPaths: Set<string> = new Set();
 
   // External confirmation callback (avoids creating a second readline on stdin)
-  private confirmFn?: (message: string) => Promise<boolean>;
+  private confirmFn?: (toolName: string, input: Record<string, any>) => Promise<"allow" | "deny">;
 
   // Sub-agent output buffer (captures text instead of printing)
   private outputBuffer: string[] | null = null;
@@ -123,7 +121,6 @@ export class Agent {
     this.useOpenAI = !!options.apiBase;
     this.isSubAgent = options.isSubAgent || false;
     this.tools = options.customTools || toolDefinitions;
-    this.maxCostUsd = options.maxCostUsd;
     this.maxTurns = options.maxTurns;
     this.confirmFn = options.confirmFn;
     this.effectiveWindow = getContextWindow(this._model) - 20000;
@@ -180,7 +177,7 @@ export class Agent {
     return this.abortController !== null;
   }
 
-  setConfirmFn(fn: (message: string) => Promise<boolean>) {
+  setConfirmFn(fn: (toolName: string, input: Record<string, any>) => Promise<"allow" | "deny">) {
     this.confirmFn = fn;
   }
 
@@ -247,27 +244,9 @@ export class Agent {
     printInfo("Conversation cleared.");
   }
 
-  showCost() {
-    const total = this.getCurrentCostUsd();
-    const budgetInfo = this.maxCostUsd ? ` / $${this.maxCostUsd} budget` : "";
-    const turnInfo = this.maxTurns ? ` | Turns: ${this.currentTurns}/${this.maxTurns}` : "";
-    printInfo(
-      `Tokens: ${this.totalInputTokens} in / ${this.totalOutputTokens} out\n  Estimated cost: $${total.toFixed(4)}${budgetInfo}${turnInfo}`
-    );
-  }
 
-  // ─── Budget control ────────────────────────────────────────
-
-  private getCurrentCostUsd(): number {
-    const costIn = (this.totalInputTokens / 1_000_000) * 3;
-    const costOut = (this.totalOutputTokens / 1_000_000) * 15;
-    return costIn + costOut;
-  }
 
   private checkBudget(): { exceeded: boolean; reason?: string } {
-    if (this.maxCostUsd !== undefined && this.getCurrentCostUsd() >= this.maxCostUsd) {
-      return { exceeded: true, reason: `Cost limit reached ($${this.getCurrentCostUsd().toFixed(4)} >= $${this.maxCostUsd})` };
-    }
     if (this.maxTurns !== undefined && this.currentTurns >= this.maxTurns) {
       return { exceeded: true, reason: `Turn limit reached (${this.currentTurns} >= ${this.maxTurns})` };
     }
@@ -702,7 +681,7 @@ export class Agent {
 
       if (toolUses.length === 0) {
         if (!this.isSubAgent) {
-          printCost(this.totalInputTokens, this.totalOutputTokens);
+          flushMarkdown();
         }
         break;
       }
@@ -734,8 +713,8 @@ export class Agent {
           continue;
         }
         if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-          const confirmed = await this.confirmDangerous(perm.message);
-          if (!confirmed) {
+          const choice = await this.confirmDangerous(toolUse.name, input, perm.message);
+          if (choice === "deny") {
             toolResults.push({
               type: "tool_result",
               tool_use_id: toolUse.id,
@@ -862,7 +841,7 @@ export class Agent {
       const toolCalls = message.tool_calls;
       if (!toolCalls || toolCalls.length === 0) {
         if (!this.isSubAgent) {
-          printCost(this.totalInputTokens, this.totalOutputTokens);
+          flushMarkdown();
         }
         break;
       }
@@ -901,8 +880,8 @@ export class Agent {
           continue;
         }
         if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-          const confirmed = await this.confirmDangerous(perm.message);
-          if (!confirmed) {
+          const choice = await this.confirmDangerous(fnName, input, perm.message);
+          if (choice === "deny") {
             this.openaiMessages.push({
               role: "tool",
               tool_call_id: tc.id,
@@ -1028,24 +1007,62 @@ export class Agent {
 
   // ─── Shared ──────────────────────────────────────────────────
 
-  private async confirmDangerous(command: string): Promise<boolean> {
-    printConfirmation(command);
-    // Use external confirmFn if provided (REPL mode passes one that reuses
-    // the existing readline, avoiding the classic Node.js bug where a second
-    // readline.createInterface on the same stdin kills the first one on close).
+  /**
+   * Prompt user for permission on a dangerous action.
+   * Returns "allow" or "deny". Handles "remember" choices by persisting rules.
+   */
+  private async confirmDangerous(
+    toolName: string,
+    input: Record<string, any>,
+    displayMessage: string,
+  ): Promise<"allow" | "deny"> {
+    printConfirmation(displayMessage);
+
+    // Use external confirmFn if provided (REPL mode injects one with showMenu)
     if (this.confirmFn) {
-      return this.confirmFn(command);
+      return this.confirmFn(toolName, input);
     }
-    // Fallback for one-shot / non-REPL usage: create a temporary readline
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
-    return new Promise((resolve) => {
-      rl.question("  Allow? (y/n): ", (answer) => {
-        rl.close();
-        resolve(answer.toLowerCase().startsWith("y"));
-      });
-    });
+
+    // Fallback: interactive menu (one-shot mode, no REPL)
+    const options = [
+      { label: "Allow (this time only)", value: "allow" },
+      { label: "Allow, and remember for this project", value: "allow-remember" },
+      { label: "Deny (this time only)", value: "deny" },
+      { label: "Deny, and always deny for this project", value: "deny-remember" },
+    ];
+
+    const choice = await showMenu("Allow this action? [↑/↓ + Enter]", options);
+
+    return this.handlePermissionChoice(choice, toolName, input);
+  }
+
+  /**
+   * Shared logic: interpret a menu choice and persist if "remember".
+   */
+  private handlePermissionChoice(
+    choice: string | null,
+    toolName: string,
+    input: Record<string, any>,
+  ): "allow" | "deny" {
+    if (choice === "allow-remember") {
+      const rule = generatePermissionRule(toolName, input);
+      savePermissionRule(rule, "allow");
+      printInfo(`Allowed & remembered: ${rule}`);
+      return "allow";
+    }
+
+    if (choice === "deny-remember") {
+      const rule = generatePermissionRule(toolName, input);
+      savePermissionRule(rule, "deny");
+      printInfo(`Denied & remembered: ${rule}`);
+      return "deny";
+    }
+
+    if (choice === "allow") {
+      return "allow";
+    }
+
+    // null (Ctrl+C / Escape) or "deny"
+    return "deny";
   }
 }

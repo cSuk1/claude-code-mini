@@ -86,15 +86,6 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 
   registry.register({
-    name: "cost",
-    description: "Show token usage and cost",
-    usage: "/cost",
-    handler: (agent, _args) => {
-      agent.showCost();
-    },
-  });
-
-  registry.register({
     name: "compact",
     description: "Manually compact conversation",
     usage: "/compact",

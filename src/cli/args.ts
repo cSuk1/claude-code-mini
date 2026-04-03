@@ -7,7 +7,6 @@ export interface ParsedArgs {
   prompt?: string;
   resume?: boolean;
   thinking?: boolean;
-  maxCost?: number;
   maxTurns?: number;
 }
 
@@ -24,14 +23,12 @@ Options:
   --model, -m         Model to use (default: claude-opus-4-6, or MINI_CLAUDE_MODEL env)
   --api-base URL      Use OpenAI-compatible API endpoint (key via env var)
   --resume            Resume the last session
-  --max-cost USD      Stop when estimated cost exceeds this amount
   --max-turns N       Stop after N agentic turns
   --help, -h          Show this help
 
 REPL commands:
   /help               Show all available commands
   /clear              Clear conversation history
-  /cost               Show token usage and cost
   /compact            Manually compact conversation
   /model [tier] [name] Show/switch model or tier (pro/lite/mini)
   /memory             List saved memories
@@ -45,7 +42,6 @@ Examples:
   claude-code-mini --yolo "run all tests and fix failures"
   claude-code-mini --plan "how would you refactor this?"
   claude-code-mini --accept-edits "add error handling to api.ts"
-  claude-code-mini --max-cost 0.50 --max-turns 20 "implement feature X"
   OPENAI_API_KEY=sk-xxx claude-code-mini --api-base https://aihubmix.com/v1 --model gpt-4o "hello"
   claude-code-mini --resume
   claude-code-mini  # starts interactive REPL
@@ -59,7 +55,6 @@ export function parseArgs(): ParsedArgs {
   let model = process.env.MINI_CLAUDE_MODEL || "claude-opus-4-6";
   let apiBase: string | undefined;
   let resume = false;
-  let maxCost: number | undefined;
   let maxTurns: number | undefined;
   const positional: string[] = [];
 
@@ -80,9 +75,6 @@ export function parseArgs(): ParsedArgs {
       apiBase = args[++i];
     } else if (args[i] === "--resume") {
       resume = true;
-    } else if (args[i] === "--max-cost") {
-      const v = parseFloat(args[++i]);
-      if (!isNaN(v)) maxCost = v;
     } else if (args[i] === "--max-turns") {
       const v = parseInt(args[++i], 10);
       if (!isNaN(v)) maxTurns = v;
@@ -100,7 +92,6 @@ export function parseArgs(): ParsedArgs {
     apiBase,
     resume,
     thinking,
-    maxCost,
     maxTurns,
     prompt: positional.length > 0 ? positional.join(" ") : undefined,
   };

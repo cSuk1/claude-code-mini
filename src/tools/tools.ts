@@ -6,5 +6,7 @@ export {
   loadPermissionRules,
   needsConfirmation,
   resetPermissionCache,
+  savePermissionRule,
+  generatePermissionRule,
   type PermissionMode,
 } from "./permissions.js";

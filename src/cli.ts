@@ -10,14 +10,14 @@ import { initModelTiers } from "./core/model-tiers.js";
 
 async function main() {
   const args = parseArgs();
-  const { permissionMode, model, prompt, resume, thinking, maxCost, maxTurns } = args;
+  const { permissionMode, model, prompt, resume, thinking, maxTurns } = args;
   const { apiBase, apiKey, useOpenAI } = resolveApiConfig(args);
 
   // Initialize model tier system (loads config files + env vars)
   initModelTiers();
 
   const agent = new Agent({
-    permissionMode, model, thinking, maxCostUsd: maxCost, maxTurns,
+    permissionMode, model, thinking, maxTurns,
     apiBase: useOpenAI ? apiBase : undefined,
     anthropicBaseURL: !useOpenAI ? apiBase : undefined,
     apiKey,

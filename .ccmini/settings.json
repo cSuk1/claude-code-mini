@@ -12,5 +12,17 @@
     "list_files": "allow",
     "grep_search": "allow",
     "run_shell": "ask"
+  },
+  "permissions": {
+    "allow": [
+      "run_shell(rm test.js*)",
+      "run_shell(rm test.html*)",
+      "run_shell(rm /Users/caixing/go/claude-code-mini/test.html*)",
+      "run_shell(rm /Users/caixing/go/claude-code-mini/test.cpp*)",
+      "run_shell(ls *)",
+      "write_file(/Users/caixing/go/claude-code-mini/.ccmini/agents/AGENT.md)",
+      "write_file(/Users/caixing/go/claude-code-mini/.ccmini/agents/code-reviewer.md)"
+    ],
+    "deny": []
   }
 }

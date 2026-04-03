@@ -49,11 +49,6 @@ function padVisual(s: string, targetWidth: number): string {
 
 // ─── Helper: format token counts ────────────────────────────
 
-function formatTokens(n: number): string {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
-  return String(n);
-}
 
 // ─── Helper: box line builder ───────────────────────────────
 
@@ -423,32 +418,133 @@ export function printConfirmation(command: string): void {
   );
 }
 
+// ─── Interactive selection menu ──────────────────────────────
+
+export interface MenuOption {
+  label: string;
+  value: string;
+}
+
+/**
+ * Interactive menu with up/down key navigation.
+ * Returns the selected option's value, or null if cancelled (Ctrl+C).
+ *
+ * IMPORTANT: When used from REPL, the caller must rl.pause() BEFORE calling
+ * this function and rl.resume() AFTER it returns.
+ */
+export async function showMenu(title: string, options: MenuOption[]): Promise<string | null> {
+  if (options.length === 0) return null;
+
+  // Total lines we render each frame: 1 (title) + options.length
+  const totalLines = 1 + options.length;
+
+  return new Promise((resolve) => {
+    let selected = 0;
+    let resolved = false;
+    let firstRender = true;
+
+    // Save terminal state
+    const wasRaw = process.stdin.isRaw;
+
+    // ── Isolate stdin from readline ──────────────────────────
+    // readline installs a permanent `data→keypress` pipeline on stdin via
+    // emitKeypressEvents(). Even after rl.pause(), this pipeline keeps
+    // emitting 'keypress' events which readline still partially handles
+    // (e.g. arrow keys → history navigation, outputting old prompts).
+    //
+    // Fix: temporarily remove ALL 'keypress' listeners so readline is
+    // completely deaf while the menu is active.
+    const savedKeypressListeners = process.stdin.listeners("keypress").slice();
+    process.stdin.removeAllListeners("keypress");
+
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
+      // Remove our key handler
+      process.stdin.off("data", onData);
+      // Restore raw mode state
+      if (process.stdin.isTTY && wasRaw !== undefined) {
+        process.stdin.setRawMode(wasRaw);
+      }
+      // Pause stdin before restoring keypress listeners, so readline
+      // doesn't get stale data events when it resumes.
+      process.stdin.pause();
+      // Restore readline's keypress listeners
+      for (const fn of savedKeypressListeners) {
+        process.stdin.on("keypress", fn as (...args: any[]) => void);
+      }
+      // Clear the entire menu (move up totalLines, clear each)
+      for (let i = 0; i < totalLines; i++) {
+        process.stdout.write("\x1b[1A\x1b[2K");
+      }
+    };
+
+    const render = () => {
+      // On re-render: move cursor up and clear the lines we drew last time
+      if (!firstRender) {
+        for (let i = 0; i < totalLines; i++) {
+          process.stdout.write("\x1b[1A\x1b[2K");
+        }
+      }
+      firstRender = false;
+
+      process.stdout.write("\x1b[?25l"); // Hide cursor
+      console.log(C.muted("  " + title));
+      for (let i = 0; i < options.length; i++) {
+        const prefix = i === selected ? C.accent("  ❯ ") : "    ";
+        const label = i === selected ? C.bold(options[i].label) : C.muted(options[i].label);
+        console.log(prefix + label);
+      }
+      process.stdout.write("\x1b[?25h"); // Show cursor
+    };
+
+    const onData = (data: Buffer) => {
+      if (resolved) return;
+      const key = data.toString();
+
+      // Up arrow
+      if (key === "\x1b[A") {
+        selected = (selected - 1 + options.length) % options.length;
+        render();
+      }
+      // Down arrow
+      else if (key === "\x1b[B") {
+        selected = (selected + 1) % options.length;
+        render();
+      }
+      // Enter
+      else if (key === "\r" || key === "\n") {
+        cleanup();
+        resolve(options[selected].value);
+      }
+      // Ctrl+C or Escape
+      else if (key === "\x03" || key === "\x1b") {
+        cleanup();
+        resolve(null);
+      }
+      // Ignore all other keys
+    };
+
+    // Enter raw mode BEFORE resuming stdin — raw mode prevents the
+    // emitKeypressEvents pipeline from firing 'keypress' events.
+    if (process.stdin.isTTY) {
+      process.stdin.setRawMode(true);
+    }
+    process.stdin.on("data", onData);
+    // Resume stdin (it was paused by rl.pause() in REPL mode)
+    process.stdin.resume();
+
+    // Initial render
+    render();
+  });
+}
+
 // ─── Divider ─────────────────────────────────────────────────
 
 export function printDivider() {
   console.log("");
 }
 
-// ─── Cost ────────────────────────────────────────────────────
-
-export function printCost(inputTokens: number, outputTokens: number) {
-  const costIn = (inputTokens / 1_000_000) * 3;
-  const costOut = (outputTokens / 1_000_000) * 15;
-  const total = costIn + costOut;
-
-  // Micro bar: visualize in/out ratio
-  const barWidth = 12;
-  const totalTokens = inputTokens + outputTokens || 1;
-  const inWidth = Math.round((inputTokens / totalTokens) * barWidth);
-  const outWidth = barWidth - inWidth;
-  const bar = C.accentDim("━".repeat(inWidth)) + C.muted("━".repeat(outWidth));
-
-  console.log(
-    C.muted("  ↳ ") + bar + C.muted(
-      ` ${formatTokens(inputTokens)} in · ${formatTokens(outputTokens)} out · $${total.toFixed(2)}`
-    )
-  );
-}
 
 // ─── Retry ───────────────────────────────────────────────────
 
