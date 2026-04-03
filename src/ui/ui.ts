@@ -560,6 +560,21 @@ export function printInfo(msg: string) {
   console.log(C.accentDim(`\n  ● `) + C.muted(msg));
 }
 
+// ─── Token usage ────────────────────────────────────────────
+
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
+
+export function printTokenUsage(inputTokens: number, outputTokens: number) {
+  const total = inputTokens + outputTokens;
+  console.log(
+    C.muted(`  ↳ tokens: ${fmtTokens(inputTokens)} in · ${fmtTokens(outputTokens)} out · ${fmtTokens(total)} total`)
+  );
+}
+
 // ─── Task list display ──────────────────────────────────────
 //
 // Task progress is shown in two ways:

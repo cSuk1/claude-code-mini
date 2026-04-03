@@ -32,6 +32,7 @@ import {
   getTaskSpinnerLabel,
   printTaskSummary,
   clearTaskList,
+  printTokenUsage,
 } from "../ui/ui.js";
 import { saveSession } from "../storage/session.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
@@ -236,6 +237,7 @@ export class Agent {
       if (tasks.length > 0 && tasks.every((t) => t.status === "completed")) {
         printTaskSummary(tasks);
       }
+      printTokenUsage(this.totalInputTokens, this.totalOutputTokens);
       printDivider();
       this.autoSave();
     }
