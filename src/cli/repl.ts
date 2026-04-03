@@ -78,6 +78,20 @@ export async function runRepl(agent: Agent) {
         askQuestion();
         return;
       }
+      if (input === "/model" || input.startsWith("/model ")) {
+        const newModel = input.slice(7).trim();
+        if (!newModel) {
+          printInfo(`Current model: ${agent.model}`);
+        } else {
+          const result = agent.switchModel(newModel);
+          printInfo(`Switched to model: ${result.model}`);
+          if (!result.known) {
+            printInfo(`Warning: "${result.model}" is not a recognized model. Make sure the model name is correct and your API backend supports it.`);
+          }
+        }
+        askQuestion();
+        return;
+      }
       if (input === "/memory") {
         const memories = listMemories();
         if (memories.length === 0) {

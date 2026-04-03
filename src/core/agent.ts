@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import chalk from "chalk";
 import { toolDefinitions, executeTool, checkPermission, type ToolDef, type PermissionMode } from "../tools/tools.js";
-import { getContextWindow, modelSupportsAdaptiveThinking, modelSupportsThinking, getMaxOutputTokens } from "./agent-model.js";
+import { getContextWindow, isInternalModel, modelSupportsAdaptiveThinking, modelSupportsThinking, getMaxOutputTokens } from "./agent-model.js";
 import { withRetry } from "./agent-retry.js";
 import { toOpenAITools } from "./agent-openai-tools.js";
 import {
@@ -62,7 +62,7 @@ export class Agent {
   private permissionMode: PermissionMode;
   private thinking: boolean;
   private thinkingMode: "adaptive" | "enabled" | "disabled";
-  readonly model: string;
+  private _model: string;
   private systemPrompt: string;
   private tools: ToolDef[];
   private totalInputTokens = 0;
@@ -97,12 +97,14 @@ export class Agent {
   private anthropicMessages: Anthropic.MessageParam[] = [];
   private openaiMessages: OpenAI.ChatCompletionMessageParam[] = [];
 
+  get model(): string { return this._model; }
+
   constructor(options: AgentOptions = {}) {
     // Permission mode: explicit mode > yolo legacy > default
     this.permissionMode = options.permissionMode
       || (options.yolo ? "bypassPermissions" : "default");
     this.thinking = options.thinking || false;
-    this.model = options.model || "claude-opus-4-6";
+    this._model = options.model || "minimax-m2.5";
     this.thinkingMode = this.resolveThinkingMode();
     this.useOpenAI = !!options.apiBase;
     this.isSubAgent = options.isSubAgent || false;
@@ -110,7 +112,7 @@ export class Agent {
     this.maxCostUsd = options.maxCostUsd;
     this.maxTurns = options.maxTurns;
     this.confirmFn = options.confirmFn;
-    this.effectiveWindow = getContextWindow(this.model) - 20000;
+    this.effectiveWindow = getContextWindow(this._model) - 20000;
     this.sessionId = randomUUID().slice(0, 8);
     this.sessionStartTime = new Date().toISOString();
 
@@ -144,6 +146,24 @@ export class Agent {
 
   abort() {
     this.abortController?.abort();
+  }
+
+  /**
+   * Dynamically switch the model at runtime.
+   * Updates context window, thinking mode, and returns switch result.
+   */
+  switchModel(newModel: string): { model: string; known: boolean } {
+    if (newModel === this._model) return { model: this._model, known: true };
+    const known = isInternalModel(newModel);
+    if (!known) {
+      return { model: newModel, known: false };
+    }
+    this._model = newModel;
+    this.effectiveWindow = getContextWindow(newModel) - 20000;
+    this.thinkingMode = this.resolveThinkingMode();
+    // A model is "known" if getContextWindow returns a specific (non-default) value
+    // or it at least looks like a recognized provider prefix
+    return { model: this._model, known };
   }
 
   get isProcessing(): boolean {
@@ -631,7 +651,13 @@ export class Agent {
       this.runCompressionPipeline();
 
       if (!this.isSubAgent) startSpinner();
-      const response = await this.callAnthropicStream();
+      let response: Anthropic.Message;
+      try {
+        response = await this.callAnthropicStream();
+      } catch (e) {
+        if (!this.isSubAgent) stopSpinner();
+        throw e;
+      }
       if (!this.isSubAgent) stopSpinner();
       this.lastApiCallTime = Date.now();
       this.totalInputTokens += response.usage.input_tokens;
@@ -785,7 +811,13 @@ export class Agent {
       this.runCompressionPipeline();
 
       if (!this.isSubAgent) startSpinner();
-      const response = await this.callOpenAIStream();
+      let response: OpenAI.ChatCompletion;
+      try {
+        response = await this.callOpenAIStream();
+      } catch (e) {
+        if (!this.isSubAgent) stopSpinner();
+        throw e;
+      }
       if (!this.isSubAgent) stopSpinner();
       this.lastApiCallTime = Date.now();
 

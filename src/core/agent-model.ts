@@ -1,15 +1,16 @@
 const MODEL_CONTEXT: Record<string, number> = {
-  "claude-opus-4-6": 200000,
-  "claude-sonnet-4-6": 200000,
-  "claude-sonnet-4-20250514": 200000,
-  "claude-haiku-4-5-20251001": 200000,
-  "claude-opus-4-20250514": 200000,
-  "gpt-4o": 128000,
-  "gpt-4o-mini": 128000,
+  "minimax-m2.5": 200000,
+  "kimi-k2.5": 200000,
+  "glm-5": 200000,
 };
 
 export function getContextWindow(model: string): number {
   return MODEL_CONTEXT[model] || 200000;
+}
+
+export function isInternalModel(model: string): boolean {
+  const normalized = model.toLowerCase();
+  return MODEL_CONTEXT[model] !== undefined;
 }
 
 export function modelSupportsThinking(model: string): boolean {

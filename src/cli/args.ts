@@ -32,6 +32,7 @@ REPL commands:
   /clear              Clear conversation history
   /cost               Show token usage and cost
   /compact            Manually compact conversation
+  /model [name]       Show current model or switch to a new one
   /memory             List saved memories
   /skills             List available skills
   /<skill-name>       Invoke a skill (e.g. /commit "fix types")
