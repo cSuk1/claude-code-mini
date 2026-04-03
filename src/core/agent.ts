@@ -33,6 +33,7 @@ import { saveSession } from "../storage/session.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
 import { getSubAgentConfig, type SubAgentType } from "../extensions/subagent.js";
 import * as readline from "readline";
+import { getModelForTask, type TaskType } from "./model-tiers.js";
 import { randomUUID } from "crypto";
 
 // ─── OpenAI tool format adapter ─────────────────────────────
@@ -65,6 +66,7 @@ interface AgentOptions {
   customSystemPrompt?: string;
   customTools?: ToolDef[];
   isSubAgent?: boolean;
+  taskType?: TaskType;        // Task type for model selection
 }
 
 export class Agent {
@@ -84,6 +86,7 @@ export class Agent {
   private sessionId: string;
   private sessionStartTime: string;
   private isSubAgent: boolean;
+  private taskType?: TaskType;
 
   // Budget control
   private maxCostUsd?: number;
@@ -116,7 +119,15 @@ export class Agent {
     this.permissionMode = options.permissionMode
       || (options.yolo ? "bypassPermissions" : "default");
     this.thinking = options.thinking || false;
-    this._model = options.model || "minimax-m2.5";
+    // Model selection: explicit model > task-based > default
+    this.taskType = options.taskType;
+    if (options.model) {
+      this._model = options.model;
+    } else if (options.taskType) {
+      this._model = getModelForTask(options.taskType);
+    } else {
+      this._model = "minimax-m2.5";
+    }
     this.thinkingMode = this.resolveThinkingMode();
     this.useOpenAI = !!options.apiBase;
     this.isSubAgent = options.isSubAgent || false;
@@ -537,6 +548,7 @@ export class Agent {
     }
   }
 
+  // when prompt cache is cold, clear all but recent N tool results
   private microcompactOpenAI(): void {
     if (!this.lastApiCallTime || (Date.now() - this.lastApiCallTime) < MICROCOMPACT_IDLE_MS) return;
 
@@ -626,8 +638,17 @@ export class Agent {
     printSubAgentStart(type, description);
 
     const config = getSubAgentConfig(type);
+    
+    // Determine task type for sub-agent
+    const taskTypeMap: Record<string, TaskType> = {
+      "explore": "sub-agent-explore",
+      "plan": "sub-agent-plan",
+      "general": "sub-agent-general",
+    };
+    const taskType = taskTypeMap[type] || "sub-agent-general";
+    
     const subAgent = new Agent({
-      model: this.model,
+      model: this.model, // Inherit from parent for now, will use task-based selection
       apiKey: this.anthropicClient
         ? undefined  // Anthropic SDK reads from env
         : undefined,
@@ -635,6 +656,7 @@ export class Agent {
       customSystemPrompt: config.systemPrompt,
       customTools: config.tools,
       isSubAgent: true,
+      taskType: taskType, // Set task type for model selection
       permissionMode: "bypassPermissions", // Sub-agents don't need confirmation
     });
 
