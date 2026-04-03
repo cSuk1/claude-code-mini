@@ -349,6 +349,12 @@ export function printToolCall(name: string, input: Record<string, any>) {
 
 // ─── Tool result ─────────────────────────────────────────────
 
+const COLLAPSED_TOOL_RESULTS = new Set(["read_file", "list_files", "grep_search", "run_shell"]);
+
+function printCollapsedToolResult(result: string) {
+  console.log(C.muted("  ↳ ... (" + result.length + " chars total)"));
+}
+
 export function printToolResult(name: string, result: string) {
   // Edit/write results get special colorized display
   if ((name === "edit_file" || name === "write_file") && !result.startsWith("Error")) {
@@ -357,6 +363,11 @@ export function printToolResult(name: string, result: string) {
   }
 
   const isError = result.startsWith("Error");
+  if (!isError && COLLAPSED_TOOL_RESULTS.has(name)) {
+    printCollapsedToolResult(result);
+    return;
+  }
+
   const prefix = isError ? C.error("  ✗ ") : C.muted("  ↳ ");
 
   const maxLen = 500;
@@ -680,8 +691,18 @@ export function printSubAgentEnd(type: string, _description: string) {
 
 function getToolSummary(name: string, input: Record<string, any>): string {
   switch (name) {
-    case "read_file":
-      return input.file_path;
+    case "read_file": {
+      const offset = typeof input.offset === "number" && Number.isFinite(input.offset)
+        ? Math.max(1, Math.floor(input.offset))
+        : 1;
+      if (input.limit === 0) {
+        return `${input.file_path}  [from ${offset}, all]`;
+      }
+      const limit = typeof input.limit === "number" && Number.isFinite(input.limit)
+        ? Math.max(1, Math.floor(input.limit))
+        : 80;
+      return `${input.file_path}  [offset=${offset}, limit=${limit}]`;
+    }
     case "write_file":
       return input.file_path;
     case "edit_file":
