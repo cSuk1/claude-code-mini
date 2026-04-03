@@ -65,8 +65,8 @@ export function loadPermissionRules(): PermissionRules {
   const allow: ParsedRule[] = [];
   const deny: ParsedRule[] = [];
 
-  const userSettings = loadSettings(join(homedir(), ".claude", "settings.json"));
-  const projectSettings = loadSettings(join(process.cwd(), ".claude", "settings.json"));
+  const userSettings = loadSettings(join(homedir(), ".ccmini", "settings.json"));
+  const projectSettings = loadSettings(join(process.cwd(), ".ccmini", "settings.json"));
 
   for (const settings of [userSettings, projectSettings]) {
     if (!settings?.permissions) continue;

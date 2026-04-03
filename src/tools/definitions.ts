@@ -128,7 +128,7 @@ export const toolDefinitions: ToolDef[] = [
   {
     name: "skill",
     description:
-      "Invoke a registered skill by name. Skills are prompt templates loaded from .claude/skills/. Returns the skill's resolved prompt to follow.",
+      "Invoke a registered skill by name. Skills are prompt templates loaded from .ccmini/skills/. Returns the skill's resolved prompt to follow.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -147,7 +147,7 @@ export const toolDefinitions: ToolDef[] = [
   {
     name: "agent",
     description:
-      "Launch a sub-agent to handle a task autonomously. Sub-agents have isolated context and return their result. Types: 'explore' (read-only, fast search), 'plan' (read-only, structured planning), 'general' (full tools).",
+      "Launch a sub-agent to handle a task autonomously. Sub-agents have isolated context and return their result. Built-in types: 'explore' (read-only, fast search), 'plan' (read-only, structured planning), 'general' (full tools). Custom agent types defined in .ccmini/agents/*.md are also available — see system prompt for details. You can optionally specify a model tier (pro/lite/mini) or an explicit model name.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -161,8 +161,11 @@ export const toolDefinitions: ToolDef[] = [
         },
         type: {
           type: "string",
-          enum: ["explore", "plan", "general"],
-          description: "Agent type: explore (read-only), plan (planning), general (full tools). Default: general",
+          description: "Agent type. Built-in: explore (read-only), plan (planning), general (full tools). Also accepts custom agent names. Default: general",
+        },
+        model: {
+          type: "string",
+          description: "Optional model tier (pro/lite/mini) or explicit model name for this sub-agent. If omitted, model is chosen automatically based on agent type or custom agent config.",
         },
       },
       required: ["description", "prompt"],

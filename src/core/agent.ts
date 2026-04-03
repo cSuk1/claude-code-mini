@@ -31,9 +31,9 @@ import {
 } from "../ui/ui.js";
 import { saveSession } from "../storage/session.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
-import { getSubAgentConfig, type SubAgentType } from "../extensions/subagent.js";
+import { getSubAgentConfig, BUILTIN_AGENT_TYPES, type SubAgentType } from "../extensions/subagent.js";
 import * as readline from "readline";
-import { getModelForTask, type TaskType } from "./model-tiers.js";
+import { getModelForTier, resolveSubAgentModel } from "./model-tiers.js";
 import { randomUUID } from "crypto";
 
 // ─── OpenAI tool format adapter ─────────────────────────────
@@ -66,7 +66,6 @@ interface AgentOptions {
   customSystemPrompt?: string;
   customTools?: ToolDef[];
   isSubAgent?: boolean;
-  taskType?: TaskType;        // Task type for model selection
 }
 
 export class Agent {
@@ -86,7 +85,6 @@ export class Agent {
   private sessionId: string;
   private sessionStartTime: string;
   private isSubAgent: boolean;
-  private taskType?: TaskType;
 
   // Budget control
   private maxCostUsd?: number;
@@ -119,15 +117,8 @@ export class Agent {
     this.permissionMode = options.permissionMode
       || (options.yolo ? "bypassPermissions" : "default");
     this.thinking = options.thinking || false;
-    // Model selection: explicit model > task-based > default
-    this.taskType = options.taskType;
-    if (options.model) {
-      this._model = options.model;
-    } else if (options.taskType) {
-      this._model = getModelForTask(options.taskType);
-    } else {
-      this._model = "minimax-m2.5";
-    }
+    // Model selection: explicit model > pro tier default
+    this._model = options.model || getModelForTier("pro");
     this.thinkingMode = this.resolveThinkingMode();
     this.useOpenAI = !!options.apiBase;
     this.isSubAgent = options.isSubAgent || false;
@@ -177,15 +168,11 @@ export class Agent {
    */
   switchModel(newModel: string): { model: string; known: boolean } {
     if (newModel === this._model) return { model: this._model, known: true };
+    // Always apply the switch — warn if model is unrecognized but don't block
     const known = isInternalModel(newModel);
-    if (!known) {
-      return { model: newModel, known: false };
-    }
     this._model = newModel;
     this.effectiveWindow = getContextWindow(newModel) - 20000;
     this.thinkingMode = this.resolveThinkingMode();
-    // A model is "known" if getContextWindow returns a specific (non-default) value
-    // or it at least looks like a recognized provider prefix
     return { model: this._model, known };
   }
 
@@ -347,8 +334,10 @@ export class Agent {
           "Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work.",
       },
     ];
+    // Use compact tier model for summarization (cheaper than main model)
+    const compactModel = resolveSubAgentModel(BUILTIN_AGENT_TYPES.COMPACT);
     const summaryResp = await this.anthropicClient!.messages.create({
-      model: this.model,
+      model: compactModel.model,
       max_tokens: 2048,
       system: "You are a conversation summarizer. Be concise but preserve important details.",
       messages: [
@@ -372,8 +361,10 @@ export class Agent {
     if (this.openaiMessages.length < 5) return;
     const systemMsg = this.openaiMessages[0];
     const lastUserMsg = this.openaiMessages[this.openaiMessages.length - 1];
+    // Use compact tier model for summarization (cheaper than main model)
+    const compactModel = resolveSubAgentModel(BUILTIN_AGENT_TYPES.COMPACT);
     const summaryResp = await this.openaiClient!.chat.completions.create({
-      model: this.model,
+      model: compactModel.model,
       max_tokens: 2048,
       messages: [
         { role: "system", content: "You are a conversation summarizer. Be concise but preserve important details." },
@@ -604,9 +595,12 @@ export class Agent {
         ? this.tools.filter(t => result.allowedTools!.includes(t.name))
         : this.tools.filter(t => t.name !== "agent");
 
-      printSubAgentStart("skill-fork", input.skill_name);
+      // Model routing: skill frontmatter `model` > default lite tier
+      const routing = resolveSubAgentModel(BUILTIN_AGENT_TYPES.EXPLORE, result.model);
+
+      printSubAgentStart("skill-fork", `${input.skill_name} [${routing.tier}:${routing.model}]`);
       const subAgent = new Agent({
-        model: this.model,
+        model: routing.model,
         apiBase: this.useOpenAI ? this.openaiClient?.baseURL : undefined,
         customSystemPrompt: result.prompt,
         customTools: tools,
@@ -634,29 +628,25 @@ export class Agent {
     const type = (input.type || "general") as SubAgentType;
     const description = input.description || "sub-agent task";
     const prompt = input.prompt || "";
-
-    printSubAgentStart(type, description);
+    const explicitModel = input.model as string | undefined;
 
     const config = getSubAgentConfig(type);
-    
-    // Determine task type for sub-agent
-    const taskTypeMap: Record<string, TaskType> = {
-      "explore": "sub-agent-explore",
-      "plan": "sub-agent-plan",
-      "general": "sub-agent-general",
-    };
-    const taskType = taskTypeMap[type] || "sub-agent-general";
-    
+
+    // Model priority: tool call explicit model > custom agent frontmatter model > tier routing
+    const routing = resolveSubAgentModel(type, explicitModel || config.model);
+
+    printSubAgentStart(type, `${description} [${routing.tier}:${routing.model}]`);
+
     const subAgent = new Agent({
       apiKey: this.anthropicClient
         ? undefined  // Anthropic SDK reads from env
         : undefined,
       apiBase: this.useOpenAI ? this.openaiClient?.baseURL : undefined,
+      model: routing.model,
       customSystemPrompt: config.systemPrompt,
       customTools: config.tools,
       isSubAgent: true,
-      taskType: taskType, // Model selection based on task type
-      permissionMode: "bypassPermissions", // Sub-agents don't need confirmation
+      permissionMode: "bypassPermissions",
     });
 
     try {

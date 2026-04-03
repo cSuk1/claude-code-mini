@@ -1,6 +1,6 @@
 // Sub-agent system — fork-return pattern with built-in + custom agent types.
-// Mirrors Claude Code's AgentTool: explore (read-only), plan (structured), general (full tools),
-// plus user-defined agents via .claude/agents/*.md.
+// Built-in types: explore (read-only), plan (structured), general (full tools), compact (summarize).
+// Custom agents via .ccmini/agents/*.md.
 
 import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
@@ -9,6 +9,28 @@ import type { ToolDef } from "../tools/tools.js";
 import { toolDefinitions } from "../tools/tools.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
 
+// ─── Built-in agent type constants ─────────────────────────
+
+export const BUILTIN_AGENT_TYPES = {
+  EXPLORE: "explore",
+  PLAN:    "plan",
+  GENERAL: "general",
+  COMPACT: "compact",
+} as const;
+
+export type BuiltinAgentType = typeof BUILTIN_AGENT_TYPES[keyof typeof BUILTIN_AGENT_TYPES];
+
+/** All built-in type names, for validation / enum usage */
+export const BUILTIN_AGENT_TYPE_NAMES = Object.values(BUILTIN_AGENT_TYPES);
+
+/** Descriptions shown in system prompt / help */
+export const BUILTIN_AGENT_DESCRIPTIONS: Record<BuiltinAgentType, string> = {
+  [BUILTIN_AGENT_TYPES.EXPLORE]: "Fast, read-only codebase search and exploration",
+  [BUILTIN_AGENT_TYPES.PLAN]:    "Read-only analysis with structured implementation plans",
+  [BUILTIN_AGENT_TYPES.GENERAL]: "Full tools for independent tasks",
+  [BUILTIN_AGENT_TYPES.COMPACT]: "Conversation summarizer for context compression",
+};
+
 // ─── Types ──────────────────────────────────────────────────
 
 export type SubAgentType = string; // Built-in or custom agent type name
@@ -16,12 +38,14 @@ export type SubAgentType = string; // Built-in or custom agent type name
 export interface SubAgentConfig {
   systemPrompt: string;
   tools: ToolDef[];
+  model?: string;   // from custom agent frontmatter, used for tier routing
 }
 
 interface CustomAgentDef {
   name: string;
   description: string;
   allowedTools?: string[];
+  model?: string;       // tier name (pro/lite/mini) or explicit model name
   systemPrompt: string;
 }
 
@@ -35,7 +59,8 @@ function getReadOnlyTools(): ToolDef[] {
 
 // ─── Built-in agent type prompts ────────────────────────────
 
-const EXPLORE_PROMPT = `You are an Explore agent — a fast, READ-ONLY sub-agent specialized for codebase exploration.
+const BUILTIN_PROMPTS: Record<BuiltinAgentType, string> = {
+  [BUILTIN_AGENT_TYPES.EXPLORE]: `You are an Explore agent — a fast, READ-ONLY sub-agent specialized for codebase exploration.
 
 IMPORTANT CONSTRAINTS:
 - You are READ-ONLY. You only have access to read_file, list_files, and grep_search.
@@ -46,9 +71,9 @@ Your job:
 - Search code for keywords (grep_search)
 - Read file contents (read_file)
 
-Be fast and thorough. Use multiple tool calls when possible. Return a concise summary of your findings.`;
+Be fast and thorough. Use multiple tool calls when possible. Return a concise summary of your findings.`,
 
-const PLAN_PROMPT = `You are a Plan agent — a READ-ONLY sub-agent specialized for designing implementation plans.
+  [BUILTIN_AGENT_TYPES.PLAN]: `You are a Plan agent — a READ-ONLY sub-agent specialized for designing implementation plans.
 
 IMPORTANT CONSTRAINTS:
 - You are READ-ONLY. You only have access to read_file, list_files, and grep_search.
@@ -64,9 +89,28 @@ Return a structured plan with:
 1. Summary of current state
 2. Step-by-step implementation steps
 3. Critical files for implementation
-4. Potential risks or considerations`;
+4. Potential risks or considerations`,
 
-const GENERAL_PROMPT = `You are a General sub-agent handling an independent task. Complete the assigned task and return a concise result. You have access to all tools.`;
+  [BUILTIN_AGENT_TYPES.GENERAL]: `You are a General sub-agent handling an independent task. Complete the assigned task and return a concise result. You have access to all tools.`,
+
+  [BUILTIN_AGENT_TYPES.COMPACT]: `You are a conversation summarizer. Be concise but preserve important details.
+Summarize the conversation so far in a concise paragraph, preserving key decisions, file paths, and context needed to continue the work.`,
+};
+
+// ─── Built-in tool sets ─────────────────────────────────────
+
+function getToolsForBuiltinType(type: BuiltinAgentType): ToolDef[] {
+  switch (type) {
+    case BUILTIN_AGENT_TYPES.EXPLORE:
+    case BUILTIN_AGENT_TYPES.PLAN:
+      return getReadOnlyTools();
+    case BUILTIN_AGENT_TYPES.COMPACT:
+      return [];  // Compact agent only processes text, no tools needed
+    case BUILTIN_AGENT_TYPES.GENERAL:
+    default:
+      return toolDefinitions.filter((t) => t.name !== "agent");
+  }
+}
 
 // ─── Custom agent discovery ─────────────────────────────────
 
@@ -78,9 +122,9 @@ function discoverCustomAgents(): Map<string, CustomAgentDef> {
   const agents = new Map<string, CustomAgentDef>();
 
   // User-level (lower priority)
-  loadAgentsFromDir(join(homedir(), ".claude", "agents"), agents);
+  loadAgentsFromDir(join(homedir(), ".ccmini", "agents"), agents);
   // Project-level (higher priority, overwrites)
-  loadAgentsFromDir(join(process.cwd(), ".claude", "agents"), agents);
+  loadAgentsFromDir(join(process.cwd(), ".ccmini", "agents"), agents);
 
   cachedCustomAgents = agents;
   return agents;
@@ -105,6 +149,7 @@ function loadAgentsFromDir(dir: string, agents: Map<string, CustomAgentDef>): vo
         name,
         description: meta.description || "",
         allowedTools,
+        model: meta.model || undefined,
         systemPrompt: body,
       });
     } catch {}
@@ -113,6 +158,10 @@ function loadAgentsFromDir(dir: string, agents: Map<string, CustomAgentDef>): vo
 
 // ─── Main config function ───────────────────────────────────
 
+export function isBuiltinAgentType(type: string): type is BuiltinAgentType {
+  return (BUILTIN_AGENT_TYPE_NAMES as readonly string[]).includes(type);
+}
+
 export function getSubAgentConfig(type: SubAgentType): SubAgentConfig {
   // Check custom agents first
   const custom = discoverCustomAgents().get(type);
@@ -120,33 +169,36 @@ export function getSubAgentConfig(type: SubAgentType): SubAgentConfig {
     const tools = custom.allowedTools
       ? toolDefinitions.filter((t) => custom.allowedTools!.includes(t.name))
       : toolDefinitions.filter((t) => t.name !== "agent");
-    return { systemPrompt: custom.systemPrompt, tools };
+    return { systemPrompt: custom.systemPrompt, tools, model: custom.model };
   }
 
   // Built-in types
-  switch (type) {
-    case "explore":
-      return { systemPrompt: EXPLORE_PROMPT, tools: getReadOnlyTools() };
-    case "plan":
-      return { systemPrompt: PLAN_PROMPT, tools: getReadOnlyTools() };
-    case "general":
-    default:
-      return {
-        systemPrompt: GENERAL_PROMPT,
-        tools: toolDefinitions.filter((t) => t.name !== "agent"),
-      };
+  if (isBuiltinAgentType(type)) {
+    return {
+      systemPrompt: BUILTIN_PROMPTS[type],
+      tools: getToolsForBuiltinType(type),
+    };
   }
+
+  // Unknown type → fallback to general
+  return {
+    systemPrompt: BUILTIN_PROMPTS[BUILTIN_AGENT_TYPES.GENERAL],
+    tools: getToolsForBuiltinType(BUILTIN_AGENT_TYPES.GENERAL),
+  };
 }
 
 // ─── Available agent types (for system prompt) ──────────────
 
 export function getAvailableAgentTypes(): { name: string; description: string }[] {
-  const types: { name: string; description: string }[] = [
-    { name: "explore", description: "Fast, read-only codebase search and exploration" },
-    { name: "plan", description: "Read-only analysis with structured implementation plans" },
-    { name: "general", description: "Full tools for independent tasks" },
-  ];
+  const types: { name: string; description: string }[] = [];
 
+  // Built-in types (exclude compact — it's internal only)
+  for (const type of BUILTIN_AGENT_TYPE_NAMES) {
+    if (type === BUILTIN_AGENT_TYPES.COMPACT) continue;
+    types.push({ name: type, description: BUILTIN_AGENT_DESCRIPTIONS[type] });
+  }
+
+  // Custom agents
   for (const [name, def] of discoverCustomAgents()) {
     types.push({ name, description: def.description });
   }
@@ -156,7 +208,8 @@ export function getAvailableAgentTypes(): { name: string; description: string }[
 
 export function buildAgentDescriptions(): string {
   const types = getAvailableAgentTypes();
-  if (types.length <= 3) return ""; // Only built-in types, already in system prompt
+  // Only built-in user-facing types (3: explore, plan, general) → already in system prompt
+  if (types.length <= 3) return "";
 
   const custom = types.slice(3);
   const lines = ["\n# Custom Agent Types", ""];

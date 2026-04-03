@@ -33,7 +33,7 @@ function getProjectHash(): string {
 }
 
 export function getMemoryDir(): string {
-  const dir = join(homedir(), ".claude-code-mini", "projects", getProjectHash(), "memory");
+  const dir = join(homedir(), ".ccmini", "projects", getProjectHash(), "memory");
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   return dir;
 }

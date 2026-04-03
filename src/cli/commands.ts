@@ -2,6 +2,14 @@ import { Agent } from "../core/agent.js";
 import { printInfo, printError } from "../ui/ui.js";
 import { listMemories } from "../storage/memory.js";
 import { discoverSkills } from "../extensions/skills.js";
+import {
+  isTierName,
+  setTierModel,
+  getTierConfig,
+  formatTierInfo,
+  getModelForTier,
+  type ModelTier,
+} from "../core/model-tiers.js";
 
 // ─── Slash Command Interface ────────────────────────────────
 
@@ -101,21 +109,56 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
 
   registry.register({
     name: "model",
-    description: "Show current model or switch to a new one",
-    usage: "/model [name]",
+    description: "Show/switch model or tier (e.g. /model pro gpt-4o)",
+    usage: "/model [tier] [name]",
     hasArgs: true,
     handler: (agent, args) => {
-      const newModel = args.trim();
-      if (!newModel) {
+      const parts = args.trim().split(/\s+/).filter(Boolean);
+
+      // /model — show current model + all tiers
+      if (parts.length === 0) {
         printInfo(`Current model: ${agent.model}`);
-      } else {
-        const result = agent.switchModel(newModel);
-        printInfo(`Switched to model: ${result.model}`);
-        if (!result.known) {
-          printInfo(
-            `Warning: "${result.model}" is not a recognized model. Make sure the model name is correct and your API backend supports it.`
-          );
+        console.log("");
+        console.log("  Model tiers:");
+        console.log(formatTierInfo());
+        console.log("");
+        console.log("  Usage:");
+        console.log("    /model <name>            Switch current model");
+        console.log("    /model <tier> <name>     Set model for tier (pro/lite/mini)");
+        return;
+      }
+
+      // /model <tier> <name> — set a tier's model
+      if (parts.length >= 2 && isTierName(parts[0])) {
+        const tier = parts[0] as ModelTier;
+        const modelName = parts.slice(1).join(" ");
+        setTierModel(tier, modelName);
+        const cfg = getTierConfig(tier);
+        printInfo(`Tier ${tier.toUpperCase()} → ${cfg.model}  [runtime]`);
+        // If switching the pro tier, also switch the main agent's active model
+        if (tier === "pro") {
+          agent.switchModel(modelName);
+          printInfo(`Active model also switched to: ${modelName}`);
         }
+        return;
+      }
+
+      // /model <tier> — show a single tier's config
+      if (parts.length === 1 && isTierName(parts[0])) {
+        const cfg = getTierConfig(parts[0] as ModelTier);
+        printInfo(`Tier ${cfg.tier.toUpperCase()}: ${cfg.model}  [${cfg.source}]`);
+        printInfo(cfg.description);
+        return;
+      }
+
+      // /model <name> — switch the main agent's model directly
+      const newModel = parts.join(" ");
+      const result = agent.switchModel(newModel);
+      printInfo(`Switched to model: ${result.model}`);
+      if (!result.known) {
+        printInfo(
+          `Warning: "${result.model}" is not a recognized model. Make sure the model name is correct and your API backend supports it.`
+        );
       }
     },
   });
@@ -145,7 +188,7 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
       const skills = discoverSkills();
       if (skills.length === 0) {
         printInfo(
-          "No skills found. Add skills to .claude/skills/<name>/SKILL.md"
+          "No skills found. Add skills to .ccmini/skills/<name>/SKILL.md"
         );
       } else {
         printInfo(`${skills.length} skills:`);

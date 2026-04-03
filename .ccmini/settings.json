@@ -1,0 +1,16 @@
+{
+  "permissionMode": "default",
+  "models": {
+    "pro": "glm-5",
+    "lite": "minimax-m2.5",
+    "mini": "kimi-k2.5"
+  },
+  "tools": {
+    "read_file": "allow",
+    "write_file": "ask",
+    "edit_file": "ask",
+    "list_files": "allow",
+    "grep_search": "allow",
+    "run_shell": "ask"
+  }
+}
