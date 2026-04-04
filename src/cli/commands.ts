@@ -1,5 +1,5 @@
 import { Agent } from "../core/agent.js";
-import { printInfo, printError } from "../ui/ui.js";
+import { printInfo, printError } from "../ui/index.js";
 import { listMemories } from "../storage/memory.js";
 import { discoverSkills } from "../extensions/skills.js";
 import {

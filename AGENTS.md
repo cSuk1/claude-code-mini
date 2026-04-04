@@ -3,7 +3,7 @@
 ## Build, Lint & Test Commands
 
 - `npm run build` - Compile TypeScript to `dist/` and copy templates
-- `npm run dev` - Build and run interactively (rePL mode)
+- `npm run dev` - Build and run interactively (REPL mode)
 - `npm start` / `node dist/cli.js` - Run compiled CLI
 - `node dist/cli.js --help` - Show CLI help flags
 - `node dist/cli.js --model <name>` - Use specific model
@@ -33,7 +33,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 - **Functions/Methods**: camelCase (`chatAnthropic`, `executeToolCall`)
 - **Constants**: UPPER_SNAKE_CASE (`SNIP_THRESHOLD`, `MICROCOMPACT_IDLE_MS`)
 - **Private members**: prefix with `_` (`_model`, `lastInputTokenCount`)
-- **File names**: kebab-case for modules (`agent-compression.ts`), PascalCase for entry points
+- **File names**: kebab-case for modules (`compress.ts`, `agent-model.ts`)
 
 ### Types & Interfaces
 ```typescript
@@ -73,11 +73,11 @@ try {
 ```typescript
 export const toolDefinitions: ToolDef[] = [{
   name: "read_file",
-  description: "Read file contents...",
+  description: "Read file contents with line numbers...",
   input_schema: {
     type: "object",
     properties: {
-      file_path: { type: "string", description: "The path..." },
+      file_path: { type: "string", description: "The path to the file" },
     },
     required: ["file_path"],
   },
@@ -89,34 +89,101 @@ export const toolDefinitions: ToolDef[] = [{
 - `required` array lists mandatory fields
 
 ### Architecture Patterns
-- **Dual-Backend**: Separate message arrays for Anthropic/OpenAI (`anthropicMessages`, `openaiMessages`)
-- **Compresson Pipeline**: 4 tiers (budget → snip → microcompact → auto-compact) before each API call
-- **Sub-Agent Isolation**: Forked `Agent` instances with filtered tool sets, own message history
-- **Tier Routing**: pro (main) → lite (sub-agents) → mini (summary) based on `model-tiers.ts`
-- **Permission System**: Mode-aware checks (`default`, `plan`, `acceptEdits`, etc.), dangerous command regex detection
+
+#### Backend Abstraction
+- **MessageHandler**: Interface for backend implementations
+- **AnthropicBackend**: Handles Anthropic API streaming
+- **OpenAIBackend**: Handles OpenAI-compatible API streaming
+- Backend determines message format for tool results
+
+#### Compression Pipeline (`compress.ts`)
+- 3 tiers: budget → snip → microcompact
+- Zero-API-cost, operates on local message array
+- Separate methods for Anthropic vs OpenAI message formats
+
+#### Sub-Agent Isolation
+- Forked `Agent` instances with filtered tool sets
+- Own message history, isolated state
+- Permission mode always `bypassPermissions` for sub-agents
+
+#### Tier Routing
+- pro (main) → lite (sub-agents) → mini (summary)
+- Based on `model-tiers.ts`
+
+#### Permission System
+- Mode-aware checks (`default`, `plan`, `acceptEdits`, etc.)
+- Dangerous command regex detection
+- Path confirmation caching
 
 ### Code Organization
-- **Entry**: `src/cli.ts` → `parseArgs()` → `resolveApiConfig()` → `Agent` → `runRepl()`
-- **Core**: `core/agent.ts` (chat loop), `core/model-tiers.ts` (tier routing), `core/prompt.ts` (system prompt)
-- **Tools**: `tools/definitions.ts` (tool schema), `tools/executors.ts` (implementations), `tools/permissions.ts` (rules)
-- **Extensions**: `extensions/skills.ts` (skill discovery), `extensions/subagent.ts` (sub-agent config)
-- **UI**: `ui/ui.ts` (terminal colors, spinners, markdown, prompts)
-- **Storage**: `storage/session.ts` (persistence), `storage/memory.ts` (per-project memory)
+
+```
+src/
+├── agent/                      # Main orchestration
+│   └── agent.ts              # Agent class (~450 lines)
+│
+├── backend/                   # API backends
+│   ├── backend-types.ts      # MessageHandler interface
+│   ├── anthropic-backend.ts  # Anthropic implementation
+│   ├── openai-backend.ts     # OpenAI implementation
+│   └── index.ts              # Barrel export
+│
+├── core/                      # Core utilities
+│   ├── agent.ts              # Main Agent class
+│   ├── agent-model.ts        # Model config, context windows
+│   ├── agent-retry.ts        # Retry logic
+│   ├── compress.ts           # CompressionPipeline
+│   ├── model-tiers.ts        # Tier routing
+│   ├── prompt.ts             # System prompts
+│   └── task-store.ts         # Task state
+│
+├── tools/                     # Tool system
+│   ├── definitions.ts         # Tool schemas
+│   ├── executors.ts           # Tool implementations
+│   ├── permissions.ts         # Permission rules
+│   ├── dispatcher.ts          # Tool dispatch
+│   └── tools.ts               # Barrel export
+│
+├── ui/                        # Terminal UI
+│   ├── colors.ts              # Chalk color constants
+│   ├── spinner.ts             # Loading animation
+│   ├── markdown.ts            # Markdown rendering
+│   ├── menu.ts                # Interactive menus
+│   ├── output.ts              # Output functions
+│   └── index.ts              # Barrel export
+│
+├── storage/                   # Persistence
+│   ├── session.ts             # Session save/load
+│   └── memory.ts              # Project memory
+│
+├── extensions/                # Extensions
+│   ├── skills.ts              # Skill discovery
+│   └── subagent.ts           # Sub-agent config
+│
+└── cli/                       # CLI
+    ├── args.ts               # Argument parsing
+    ├── commands.ts           # Slash commands
+    ├── config.ts             # API config
+    ├── repl.ts               # Interactive REPL
+    └── cli.ts                # Entry point
+```
 
 ### Console Output
-- Use `chalk` for colors (`chalk.bold.cyanBright`, `chalk.dim`)
+- Use `chalk` via `ui/colors.ts` (`C.accent`, `C.muted`, etc.)
 - Functions: `printInfo()`, `printError()`, `printWarning()`, `printDivider()`, `printConfirmation()`
 - Spinners: `startSpinner()`, `stopSpinner()`, `updateSpinnerLabel()`
-- Markdown rendering via `flushMarkdown()`, `resetMarkdown()`
+- Markdown: `flushMarkdown()`, `resetMarkdown()`
 
 ### Files to Reference
-- `src/core/agent.ts:1` - Heart of the system, chat loop
-- `src/tools/definitions.ts:1` - Tool schemas (Anthropic format)
-- `src/tools/permissions.ts:1` - Permission modes, dangerous command detection
-- `src/cli/commands.ts` - Slash command registry
-- `src/cli/repl.ts:1` - Interactive REPL with tab completion
-- `src/extensions/subagent.ts:1` - Sub-agent types (explore, plan, compact, general)
+- `src/core/agent.ts` - Agent class, chat loop
+- `src/backend/anthropic-backend.ts` - Anthropic streaming
+- `src/backend/openai-backend.ts` - OpenAI streaming
+- `src/core/compress.ts` - Compression pipeline
+- `src/tools/definitions.ts` - Tool schemas
+- `src/tools/permissions.ts` - Permission modes
+- `src/cli/repl.ts` - Interactive REPL
 
-### No Test Framework Yet
-- No Jest/Mocha configured. Validate manually or add `npx tsc --noEmit`.
-- Plan mode: test `npm run dev` in REPL mode.
+### Testing
+- No Jest/Mocha configured
+- Validate with `npx tsc --noEmit`
+- Test manually via `npm run dev` in REPL mode

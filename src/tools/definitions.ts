@@ -6,8 +6,7 @@ export type ToolDef = Anthropic.Tool;
 export const toolDefinitions: ToolDef[] = [
   {
     name: "read_file",
-    description:
-      "Read file contents with line numbers. If the user asks to analyze, explain, summarize, or review a specific file, prefer a single call with limit=0 so the model sees the whole remaining file at once. Use offset and a positive limit for targeted regions, spot checks, or multi-file exploration. When limit is omitted, defaults to the first 80 lines.",
+    description: "Read file contents with line numbers. Use offset/limit for pagination, omit limit for first 80 lines, use 0 for all remaining.",
     input_schema: {
       type: "object" as const,
       properties: {
@@ -17,11 +16,11 @@ export const toolDefinitions: ToolDef[] = [
         },
         offset: {
           type: "number",
-          description: "Starting line number (1-based). Defaults to 1. Keep offset at 1 when reading a full file unless continuing from a later section.",
+          description: "Starting line number (1-based). Defaults to 1.",
         },
         limit: {
           type: "number",
-          description: "Maximum number of lines to return. Omit for the default 80-line preview, use a positive number for pagination, or set to 0 to return all remaining content. Prefer 0 when analyzing a specific file end-to-end.",
+          description: "Max lines to return. Omit for 80-line preview, 0 for all remaining.",
         },
       },
       required: ["file_path"],

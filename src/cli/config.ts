@@ -1,5 +1,5 @@
 import type { ParsedArgs } from "./args.js";
-import { printError } from "../ui/ui.js";
+import { printError } from "../ui/index.js";
 
 export interface ApiConfig {
   apiBase?: string;

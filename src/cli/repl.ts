@@ -1,7 +1,7 @@
 import * as readline from "readline";
 import chalk from "chalk";
 import { Agent } from "../core/agent.js";
-import { printWelcome, printError, printInfo, showMenu, showQuestion, showFreeTextInput } from "../ui/ui.js";
+import { printWelcome, printError, printInfo, showMenu, showQuestion, showFreeTextInput } from "../ui/index.js";
 import { discoverSkills, resolveSkillPrompt, getSkillByName, executeSkill } from "../extensions/skills.js";
 import { CommandRegistry, registerBuiltinCommands } from "./commands.js";
 import { generatePermissionRule, savePermissionRule } from "../tools/tools.js";

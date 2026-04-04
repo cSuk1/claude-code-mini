@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { Agent } from "./core/agent.js";
-import { printError, printInfo } from "./ui/ui.js";
+import { printError, printInfo } from "./ui/index.js";
 import { loadSession, getLatestSessionId } from "./storage/session.js";
 import { parseArgs } from "./cli/args.js";
 import { resolveApiConfig } from "./cli/config.js";
