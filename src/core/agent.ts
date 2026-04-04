@@ -947,53 +947,60 @@ export class Agent {
       // Execute tool calls
       for (const tc of toolCalls) {
         if (this.abortController?.signal.aborted) break;
-        if (tc.type !== "function") continue;
-        const fnName = tc.function.name;
-        let input: Record<string, any>;
-        try {
-          input = JSON.parse(tc.function.arguments);
-        } catch {
-          input = {};
-        }
-
-        printToolCall(fnName, input);
-
-        // Permission check (mode-aware)
-        const perm = checkPermission(fnName, input, this.permissionMode);
-        if (perm.action === "deny") {
-          printInfo(`Denied: ${perm.message}`);
-          this.openaiMessages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            content: `Action denied: ${perm.message}`,
-          });
-          continue;
-        }
-        if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-          const choice = await this.confirmDangerous(fnName, input, perm.message);
-          if (choice === "deny") {
-            this.openaiMessages.push({
-              role: "tool",
-              tool_call_id: tc.id,
-              content: "User denied this action.",
-            });
-            continue;
-          }
-          this.confirmedPaths.add(perm.message);
-        }
-
-        const result = await this.executeToolCall(fnName, input);
-        printToolResult(fnName, result);
-
-        this.openaiMessages.push({
-          role: "tool",
-          tool_call_id: tc.id,
-          content: result,
-        });
+        await this.executeToolCallWithPermissions(tc);
       }
 
       await this.checkAndCompact();
     }
+  }
+
+  /**
+   * Execute a single tool call with permission checks
+   */
+  private async executeToolCallWithPermissions(tc: any): Promise<void> {
+    if (tc.type !== "function") return;
+    const fnName = tc.function.name;
+    let input: Record<string, any>;
+    try {
+      input = JSON.parse(tc.function.arguments);
+    } catch {
+      input = {};
+    }
+
+    printToolCall(fnName, input);
+
+    // Permission check (mode-aware)
+    const perm = checkPermission(fnName, input, this.permissionMode);
+    if (perm.action === "deny") {
+      printInfo(`Denied: ${perm.message}`);
+      this.openaiMessages.push({
+        role: "tool",
+        tool_call_id: tc.id,
+        content: `Action denied: ${perm.message}`,
+      });
+      return;
+    }
+    if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
+      const choice = await this.confirmDangerous(fnName, input, perm.message);
+      if (choice === "deny") {
+        this.openaiMessages.push({
+          role: "tool",
+          tool_call_id: tc.id,
+          content: "User denied this action.",
+        });
+        return;
+      }
+      this.confirmedPaths.add(perm.message);
+    }
+
+    const result = await this.executeToolCall(fnName, input);
+    printToolResult(fnName, result);
+
+    this.openaiMessages.push({
+      role: "tool",
+      tool_call_id: tc.id,
+      content: result,
+    });
   }
 
   private async callOpenAIStream(): Promise<OpenAI.ChatCompletion> {
@@ -1014,6 +1021,8 @@ export class Agent {
       const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
       let finishReason = "";
       let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
+
+      const pendingTools: Promise<string>[] = [];
 
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta;
