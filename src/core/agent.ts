@@ -1,8 +1,7 @@
 import { toolDefinitions, executeTool, checkPermission, generatePermissionRule, savePermissionRule, type ToolDef, type PermissionMode, isParallelSafe, isIdempotent } from "../tools/tools.js";
 import { getContextWindow, isInternalModel } from "./agent-model.js";
-import { getModelForTier, resolveSubAgentModel } from "./model-tiers.js";
+import { getModelForTier } from "./model-tiers.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
-import { getSubAgentConfig, BUILTIN_AGENT_TYPES, type SubAgentType } from "../extensions/subagent.js";
 import { taskStore } from "./task-store.js";
 import { saveSession } from "../storage/session.js";
 import { randomUUID } from "crypto";
@@ -12,9 +11,13 @@ import {
   OpenAIBackend,
   type BackendConfig,
   type ToolResultEntry,
+  type MessageHandler,
+  type StreamResult,
 } from "../backend/index.js";
-import type { MessageHandler, StreamResult } from "../backend/index.js";
 import { CompressionPipeline } from "./compress.js";
+import { toolStrategies } from "./agent-strategies.js";
+import { resolveSubAgentModel } from "./model-tiers.js";
+import { BUILTIN_AGENT_TYPES } from "../extensions/subagent.js";
 import {
   printAssistantText,
   printToolCall,
@@ -242,7 +245,7 @@ export class Agent {
               // execute the tool call parallel
               parallelPromises.set(
                 chunk.toolCall.id,
-                this.executeToolWithPermissionParallel(chunk.toolCall.name, chunk.toolCall.id, chunk.toolCall.arguments, false)
+                this.executeToolImpl(chunk.toolCall.name, chunk.toolCall.id, chunk.toolCall.arguments, false)
               );
             }
           }
@@ -308,34 +311,14 @@ export class Agent {
   // ─── Tool execution with permissions ────────────────────────
 
   private async executeToolWithPermissions(name: string, toolCallId: string, args: string, printResults = true): Promise<ToolResultEntry | null> {
-    let input: Record<string, any>;
-    try {
-      input = JSON.parse(args);
-    } catch {
-      input = {};
-    }
-
-    if (printResults) printToolCall(name, input);
-
-    const perm = checkPermission(name, input, this.permissionMode);
-    if (perm.action === "deny") {
-      if (printResults) printInfo(`Denied: ${perm.message}`);
-      return { toolCallId, content: `Action denied: ${perm.message}` };
-    }
-    if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-      const choice = await this.confirmDangerous(name, input, perm.message);
-      if (choice === "deny") {
-        return { toolCallId, content: "User denied this action." };
-      }
-      this.confirmedPaths.add(perm.message);
-    }
-
-    const result = await this.executeToolCall(name, input);
-    if (printResults) printToolResult(name, result);
-    return { toolCallId, content: result };
+    return this.executeToolImpl(name, toolCallId, args, printResults);
   }
 
   private async executeToolWithPermissionParallel(name: string, toolCallId: string, args: string, printResults = true): Promise<ToolResultEntry | null> {
+    return this.executeToolImpl(name, toolCallId, args, printResults);
+  }
+
+  private async executeToolImpl(name: string, toolCallId: string, args: string, printResults = true): Promise<ToolResultEntry | null> {
     let input: Record<string, any>;
     try {
       input = JSON.parse(args);
@@ -497,8 +480,11 @@ export class Agent {
   // ─── Tool dispatch ──────────────────────────────────────────
 
   private async executeToolCall(name: string, input: Record<string, any>): Promise<string> {
-    if (name === "agent") return this.executeAgentTool(input);
-    if (name === "skill") return this.executeSkillTool(input);
+    // Use strategy pattern for agent and skill tools
+    if (toolStrategies.has(name)) {
+      const strategy = toolStrategies.get(name)!;
+      return strategy.execute(this, input);
+    }
     if (name === "ask_user") return this.executeAskUserTool(input);
     return executeTool(name, input);
   }
@@ -528,79 +514,6 @@ export class Agent {
       }
     } catch (e: any) {
       return `Error asking user: ${e.message}`;
-    }
-  }
-
-  private async executeSkillTool(input: Record<string, any>): Promise<string> {
-    const { executeSkill } = await import("../extensions/skills.js");
-    const result = executeSkill(input.skill_name, input.args || "");
-    if (!result) return `Unknown skill: ${input.skill_name}`;
-
-    if (result.context === "fork") {
-      const tools = result.allowedTools
-        ? this.tools.filter(t => result.allowedTools!.includes(t.name))
-        : this.tools.filter(t => t.name !== "agent");
-
-      const routing = resolveSubAgentModel(BUILTIN_AGENT_TYPES.EXPLORE, result.model);
-
-      printSubAgentStart("skill-fork", `${input.skill_name} [${routing.tier}:${routing.model}]`);
-      const subAgent = new Agent({
-        model: routing.model,
-        apiBase: this.apiBase,
-        apiKey: this.apiKey,
-        anthropicBaseURL: this.anthropicBaseURL,
-        customSystemPrompt: result.prompt,
-        customTools: tools,
-        isSubAgent: true,
-        permissionMode: "bypassPermissions",
-      });
-
-      try {
-        const subResult = await subAgent.runOnce(input.args || "Execute this skill task.");
-        this.totalInputTokens += subResult.tokens.input;
-        this.totalOutputTokens += subResult.tokens.output;
-        printSubAgentEnd("skill-fork", input.skill_name);
-        return subResult.text || "(Skill produced no output)";
-      } catch (e: any) {
-        printSubAgentEnd("skill-fork", input.skill_name);
-        return `Skill fork error: ${e.message}`;
-      }
-    }
-
-    return `[Skill "${input.skill_name}" activated]\n\n${result.prompt}`;
-  }
-
-  private async executeAgentTool(input: Record<string, any>): Promise<string> {
-    const type = (input.type || "general") as SubAgentType;
-    const description = input.description || "sub-agent task";
-    const prompt = input.prompt || "";
-    const explicitModel = input.model as string | undefined;
-
-    const config = getSubAgentConfig(type);
-    const routing = resolveSubAgentModel(type, explicitModel || config.model);
-
-    printSubAgentStart(type, `${description} [${routing.tier}:${routing.model}]`);
-
-    const subAgent = new Agent({
-      model: routing.model,
-      apiBase: this.apiBase,
-      apiKey: this.apiKey,
-      anthropicBaseURL: this.anthropicBaseURL,
-      customSystemPrompt: config.systemPrompt,
-      customTools: config.tools,
-      isSubAgent: true,
-      permissionMode: "bypassPermissions",
-    });
-
-    try {
-      const result = await subAgent.runOnce(prompt);
-      this.totalInputTokens += result.tokens.input;
-      this.totalOutputTokens += result.tokens.output;
-      printSubAgentEnd(type, description);
-      return result.text || "(Sub-agent produced no output)";
-    } catch (e: any) {
-      printSubAgentEnd(type, description);
-      return `Sub-agent error: ${e.message}`;
     }
   }
 }

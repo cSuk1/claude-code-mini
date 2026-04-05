@@ -1,10 +1,5 @@
 {
   "permissionMode": "default",
-  "models": {
-    "pro": "glm-5",
-    "lite": "minimax-m2.5",
-    "mini": "kimi-k2.5"
-  },
   "tools": {
     "read_file": "allow",
     "write_file": "ask",
@@ -25,7 +20,8 @@
       "run_shell(git push*)",
       "write_file(/Users/caixing/go/claude-code-mini/doc/ARCHITECTURE.md)",
       "run_shell(git remote*)",
-      "run_shell(cd *)"
+      "run_shell(cd *)",
+      "write_file(/Users/caixing/go/claude-code-mini/*)"
     ],
     "deny": []
   }

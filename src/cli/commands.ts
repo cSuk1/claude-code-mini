@@ -212,12 +212,16 @@ export function registerBuiltinCommands(registry: CommandRegistry): void {
   });
 }
 
-function saveApiConfig(
-  provider: "anthropic" | "openai",
-  baseUrl: string,
-  apiKey: string,
-  model?: string
-): void {
+interface ApiConfigInput {
+  provider: "anthropic" | "openai";
+  baseUrl: string;
+  apiKey: string;
+  proModel?: string;
+  liteModel?: string;
+  miniModel?: string;
+}
+
+function saveApiConfig(input: ApiConfigInput): void {
   const configPath = join(homedir(), ".ccmini", "settings.json");
   let config: any = {};
 
@@ -230,16 +234,23 @@ function saveApiConfig(
   }
 
   config.api = {
-    provider,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
+    provider: input.provider,
+    baseUrl: input.baseUrl || undefined,
+    apiKey: input.apiKey || undefined,
   };
 
-  if (model) {
-    if (!config.models) config.models = {};
-    config.models.pro = model;
-    config.models.lite = model;
-    config.models.mini = model;
+  // Use provided models or fall back to proModel for all tiers
+  if (!config.models) config.models = {};
+  const lite = input.liteModel || input.proModel;
+  const mini = input.miniModel || lite || input.proModel;
+
+  if (input.proModel) config.models.pro = input.proModel;
+  if (input.liteModel) config.models.lite = input.liteModel;
+  if (input.miniModel) config.models.mini = input.miniModel;
+  // If only proModel provided, use it for all tiers (backward compatibility)
+  else if (input.proModel && !input.liteModel && !input.miniModel) {
+    config.models.lite = input.proModel;
+    config.models.mini = input.proModel;
   }
 
   const dir = join(homedir(), ".ccmini");
@@ -247,6 +258,7 @@ function saveApiConfig(
   writeFileSync(configPath, JSON.stringify(config, null, 2));
 }
 
+// Legacy function for backward compatibility
 function saveApiConfigWithModels(
   provider: "anthropic" | "openai",
   baseUrl: string,
@@ -255,31 +267,7 @@ function saveApiConfigWithModels(
   liteModel: string,
   miniModel: string
 ): void {
-  const configPath = join(homedir(), ".ccmini", "settings.json");
-  let config: any = {};
-
-  if (existsSync(configPath)) {
-    try {
-      config = JSON.parse(readFileSync(configPath, "utf-8"));
-    } catch {
-      // Ignore malformed config
-    }
-  }
-
-  config.api = {
-    provider,
-    baseUrl: baseUrl || undefined,
-    apiKey: apiKey || undefined,
-  };
-
-  if (!config.models) config.models = {};
-  config.models.pro = proModel;
-  config.models.lite = liteModel;
-  config.models.mini = miniModel;
-
-  const dir = join(homedir(), ".ccmini");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  saveApiConfig({ provider, baseUrl, apiKey, proModel, liteModel, miniModel });
 }
 
 export async function runConnectFlow(agent?: Agent): Promise<void> {
