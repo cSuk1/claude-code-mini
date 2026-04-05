@@ -33,7 +33,7 @@ export function printWelcome(model?: string) {
   const bot = C.border("  ╰" + "─".repeat(width + 2) + "╯");
   const empty = boxEmpty(width);
 
-  const title = C.brand("✻ Claude Code Mini") + "  " + C.muted("v1.0.0");
+  const title = C.brand("✻ Claude Code Mini") + "  " + C.muted("v1.1.0");
   const titleLine = boxLine(title, width);
 
   const lines = [top, empty, titleLine, empty];
