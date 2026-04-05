@@ -1,4 +1,4 @@
-import { toolDefinitions, executeTool, checkPermission, generatePermissionRule, savePermissionRule, type ToolDef, type PermissionMode } from "../tools/tools.js";
+import { toolDefinitions, executeTool, checkPermission, generatePermissionRule, savePermissionRule, type ToolDef, type PermissionMode, isParallelSafe, isIdempotent } from "../tools/tools.js";
 import { getContextWindow, isInternalModel } from "./agent-model.js";
 import { getModelForTier, resolveSubAgentModel } from "./model-tiers.js";
 import { buildSystemPrompt, loadPlanModePrompt } from "./prompt.js";
@@ -13,7 +13,7 @@ import {
   type BackendConfig,
   type ToolResultEntry,
 } from "../backend/index.js";
-import type { MessageHandler } from "../backend/index.js";
+import type { MessageHandler, StreamResult } from "../backend/index.js";
 import { CompressionPipeline } from "./compress.js";
 import {
   printAssistantText,
@@ -206,15 +206,51 @@ export class Agent {
   private async chatLoop(): Promise<void> {
     while (true) {
       if (this.abortController?.signal.aborted) break;
-
-      // Tier 1-3 zero-cost compression
+      const toolResults: ToolResultEntry[] = [];
       this.backend.runCompression(this.compression, this.totalInputTokens);
       this.compression.updateApiCallTime();
 
       if (!this.isSubAgent) this.showSpinner();
-      let result;
+      let firstText = true;
+      let content = "";
+      let toolCalls: StreamResult["toolCalls"] = [];
+      let inputTokens = 0;
+      let outputTokens = 0;
+
+      // stream parallel tool calls(only for parallel safe tools)
+      const parallelPromises = new Map<string, Promise<ToolResultEntry | null>>();
+
       try {
-        result = await this.backend.stream(this.abortController?.signal);
+        for await (const chunk of this.backend.streamChunk(this.abortController?.signal)) {
+          if (chunk.content) {
+            if (firstText) {
+              if (!this.isSubAgent) {
+                this.hideSpinner();
+              }
+              this.emitText("\n");
+              firstText = false;
+            }
+            content += chunk.content;
+            // emit the content to the UI
+            this.emitText(chunk.content);
+          }
+          if (chunk.toolCall) {
+            // collect all tool calls
+            toolCalls.push(chunk.toolCall);
+            if (isParallelSafe(chunk.toolCall.name) && isIdempotent(chunk.toolCall.name)) {
+              // execute the tool call parallel
+              parallelPromises.set(
+                chunk.toolCall.id,
+                this.executeToolWithPermissionParallel(chunk.toolCall.name, chunk.toolCall.id, chunk.toolCall.arguments, false)
+              );
+            }
+          }
+          if (chunk.usage) {
+            // update the token usage
+            inputTokens = chunk.usage.inputTokens;
+            outputTokens = chunk.usage.outputTokens;
+          }
+        }
       } catch (e: any) {
         if (!this.isSubAgent) this.hideSpinner();
         console.error("[API Error]", e.message, e.response?.data);
@@ -222,18 +258,18 @@ export class Agent {
       }
       if (!this.isSubAgent) this.hideSpinner();
 
-      this.totalInputTokens += result.usage.inputTokens;
-      this.totalOutputTokens += result.usage.outputTokens;
+      this.totalInputTokens += inputTokens;
+      this.totalOutputTokens += outputTokens;
 
-      // Auto-compact: tier 4 API-based summarization when context fills up
-      if (result.usage.inputTokens > this.effectiveWindow * 0.85) {
+      // auto compact conversation
+      if (inputTokens > this.effectiveWindow * 0.85) {
         printInfo("Context window filling up, compacting conversation...");
         const compactModel = resolveSubAgentModel(BUILTIN_AGENT_TYPES.COMPACT).model;
         await this.backend.compactConversation(compactModel);
         printInfo("Conversation compacted.");
       }
 
-      if (result.toolCalls.length === 0) {
+      if (toolCalls.length === 0) {
         if (!this.isSubAgent) flushMarkdown();
         break;
       }
@@ -245,22 +281,29 @@ export class Agent {
         break;
       }
 
-      // Execute tools and collect backend-agnostic results
-      const toolResults: ToolResultEntry[] = [];
-      for (const tc of result.toolCalls) {
+      // wait for parallel tool calls to finish
+      const parallelResults = await Promise.all(parallelPromises.values());
+      for (const r of parallelResults) {
+        if (r) toolResults.push(r);
+      }
+
+      // execute the remaining tool calls
+      for (const tc of toolCalls) {
         if (this.abortController?.signal.aborted) break;
-        const toolResult = await this.executeToolWithPermissions(tc.name, tc.id, tc.arguments);
+        if (parallelPromises.has(tc.id)) continue;
+        const toolResult = await this.executeToolWithPermissions(tc.name, tc.id, tc.arguments, false);
         if (toolResult) toolResults.push(toolResult);
       }
 
-      // Backend handles message format differences
-      this.backend.addToolRound(result, toolResults);
+      if (!this.isSubAgent) this.printToolResultsInOrder(toolCalls, toolResults);
+
+      this.backend.addToolRound({ content, toolCalls, usage: { inputTokens, outputTokens } }, toolResults);
     }
   }
 
   // ─── Tool execution with permissions ────────────────────────
 
-  private async executeToolWithPermissions(name: string, toolCallId: string, args: string): Promise<ToolResultEntry | null> {
+  private async executeToolWithPermissions(name: string, toolCallId: string, args: string, printResults = true): Promise<ToolResultEntry | null> {
     let input: Record<string, any>;
     try {
       input = JSON.parse(args);
@@ -268,11 +311,11 @@ export class Agent {
       input = {};
     }
 
-    printToolCall(name, input);
+    if (printResults) printToolCall(name, input);
 
     const perm = checkPermission(name, input, this.permissionMode);
     if (perm.action === "deny") {
-      printInfo(`Denied: ${perm.message}`);
+      if (printResults) printInfo(`Denied: ${perm.message}`);
       return { toolCallId, content: `Action denied: ${perm.message}` };
     }
     if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
@@ -284,8 +327,46 @@ export class Agent {
     }
 
     const result = await this.executeToolCall(name, input);
-    printToolResult(name, result);
+    if (printResults) printToolResult(name, result);
     return { toolCallId, content: result };
+  }
+
+  private async executeToolWithPermissionParallel(name: string, toolCallId: string, args: string, printResults = true): Promise<ToolResultEntry | null> {
+    let input: Record<string, any>;
+    try {
+      input = JSON.parse(args);
+    } catch {
+      input = {};
+    }
+
+    if (printResults) printToolCall(name, input);
+
+    const perm = checkPermission(name, input, this.permissionMode);
+    if (perm.action === "deny") {
+      if (printResults) printInfo(`Denied: ${perm.message}`);
+      return { toolCallId, content: `Action denied: ${perm.message}` };
+    }
+    if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
+      const choice = await this.confirmDangerous(name, input, perm.message);
+      if (choice === "deny") {
+        return { toolCallId, content: "User denied this action." };
+      }
+      this.confirmedPaths.add(perm.message);
+    }
+
+    const result = await this.executeToolCall(name, input);
+    if (printResults) printToolResult(name, result);
+    return { toolCallId, content: result };
+  }
+
+  private printToolResultsInOrder(toolCalls: StreamResult["toolCalls"], toolResults: ToolResultEntry[]) {
+    const resultMap = new Map(toolResults.map(r => [r.toolCallId, r]));
+    for (const tc of toolCalls) {
+      const result = resultMap.get(tc.id);
+      if (!result) continue;
+      printToolCall(tc.name, JSON.parse(tc.arguments || "{}"));
+      printToolResult(tc.name, result.content);
+    }
   }
 
   // ─── Permission confirmation (with remember) ───────────────
@@ -406,7 +487,7 @@ export class Agent {
         anthropicMessages: type === "anthropic" ? msgs : undefined,
         openaiMessages: type === "openai" ? msgs : undefined,
       });
-    } catch {}
+    } catch { }
   }
 
   // ─── Tool dispatch ──────────────────────────────────────────

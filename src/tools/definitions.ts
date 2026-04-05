@@ -103,14 +103,14 @@ export const toolDefinitions: ToolDefWithMeta[] = [
   },
   {
     name: "grep_search",
-    description: "Search for a pattern in files.",
+    description: "Search for a pattern in files using regex. Use simple regex patterns - avoid complex quantifiers like {1,2} or unbalanced brackets.",
     metadata: { category: "read", parallelSafe: true, idempotent: true },
     input_schema: {
       type: "object" as const,
       properties: {
         pattern: {
           type: "string",
-          description: "The regex pattern to search for",
+          description: "Simple regex pattern (avoid {n,m} quantifiers, escape special chars like .*+?^${}()|[]\\)",
         },
         path: {
           type: "string",

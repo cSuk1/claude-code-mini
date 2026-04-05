@@ -1,11 +1,9 @@
 import Anthropic from "@anthropic-ai/sdk";
-import chalk from "chalk";
 import type { ToolDef } from "../tools/tools.js";
 import { getMaxOutputTokens, modelSupportsThinking, modelSupportsAdaptiveThinking } from "../core/agent-model.js";
 import { withRetry } from "../core/agent-retry.js";
-import { stopSpinner, resetMarkdown, flushMarkdown, printRetry } from "../ui/index.js";
 import type { CompressionPipeline } from "../core/compress.js";
-import type { MessageHandler, StreamResult, BackendConfig, ToolResultEntry } from "./backend-types.js";
+import type { MessageHandler, StreamResult, BackendConfig, ToolResultEntry, StreamChunk } from "./backend-types.js";
 
 export class AnthropicBackend implements MessageHandler {
   model: string;
@@ -131,82 +129,92 @@ export class AnthropicBackend implements MessageHandler {
   }
 
   async stream(signal?: AbortSignal): Promise<StreamResult> {
-    return withRetry(async (retrySignal) => {
-      const maxOutput = getMaxOutputTokens(this.model);
-      const createParams: any = {
-        model: this.model,
-        max_tokens: this.thinkingMode !== "disabled" ? maxOutput : 16384,
-        system: this.systemPrompt,
-        tools: this.tools,
-        messages: this.messages,
-      };
+    let content = "";
+    let toolCalls: StreamResult["toolCalls"] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+    let rawAssistantContent: any[] = [];
 
-      if (this.thinkingMode === "adaptive" || this.thinkingMode === "enabled") {
-        createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
+    for await (const chunk of this.streamChunk(signal)) {
+      if (chunk.content) {
+        content += chunk.content;
+        this.emitText(chunk.content);
       }
+      if (chunk.toolCall) toolCalls.push(chunk.toolCall);
+      if (chunk.usage) {
+        inputTokens = chunk.usage.inputTokens;
+        outputTokens = chunk.usage.outputTokens;
+      }
+    }
 
-      const stream = this.client.messages.stream(createParams, { signal: retrySignal });
+    return { content, toolCalls, usage: { inputTokens, outputTokens }, rawAssistantContent };
+  }
 
-      let content = "";
-      const toolCalls: StreamResult["toolCalls"] = [];
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let firstText = true;
+  async *streamChunk(signal?: AbortSignal): AsyncGenerator<StreamChunk> {
+    const maxOutput = getMaxOutputTokens(this.model);
+    const createParams: any = {
+      model: this.model,
+      max_tokens: this.thinkingMode !== "disabled" ? maxOutput : 16384,
+      system: this.systemPrompt,
+      tools: this.tools,
+      messages: this.messages,
+    };
 
-      if (!this.isSubAgent) resetMarkdown();
+    if (this.thinkingMode === "adaptive" || this.thinkingMode === "enabled") {
+      createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
+    }
 
-      stream.on("text", (text: string) => {
-        if (firstText) { if (!this.isSubAgent) stopSpinner(); this.emitText("\n"); firstText = false; }
-        this.emitText(text);
-        content += text;
+    const chunks: StreamChunk[] = [];
+    const contentParts: string[] = [];
+
+    const stream = this.client.messages.stream(createParams, { signal });
+
+    stream.on("text", (text: string) => {
+      chunks.push({ content: text });
+      contentParts.push(text);
+    });
+
+    if (this.thinkingMode !== "disabled") {
+      stream.on("streamEvent" as any, (event: any) => {
+        if (event.type === "content_block_start" && event.content_block?.type === "thinking") {
+          chunks.push({ content: "\n[thinking] " });
+          contentParts.push("[thinking] ");
+        } else if (event.type === "content_block_delta" && event.delta?.type === "thinking_delta") {
+          chunks.push({ content: event.delta.thinking });
+          contentParts.push(event.delta.thinking);
+        } else if (event.type === "content_block_stop" && event.content_block?.type === "thinking") {
+          chunks.push({ content: "\n" });
+          contentParts.push("\n");
+        }
       });
+    }
 
-      if (this.thinkingMode !== "disabled") {
-        let inThinking = false;
-        stream.on("streamEvent" as any, (event: any) => {
-          if (event.type === "content_block_start" && event.content_block?.type === "thinking") {
-            inThinking = true;
-            if (!this.isSubAgent) stopSpinner();
-            this.emitText("\n" + chalk.dim("  [thinking] "));
-          } else if (event.type === "content_block_delta" && event.delta?.type === "thinking_delta" && inThinking) {
-            this.emitText(chalk.dim(event.delta.thinking));
-          } else if (event.type === "content_block_stop" && inThinking) {
-            this.emitText("\n");
-            inThinking = false;
-          }
-        });
-      }
+    const finalMessage = await stream.finalMessage();
+    const contentBlocks = finalMessage.content.filter((block: any) => block.type !== "thinking");
 
-      const finalMessage = await stream.finalMessage();
-      if (!this.isSubAgent) flushMarkdown();
-
-      // Filter out thinking blocks from stored history
-      const contentBlocks = finalMessage.content.filter(
-        (block: any) => block.type !== "thinking"
-      );
-
-      inputTokens = finalMessage.usage.input_tokens;
-      outputTokens = finalMessage.usage.output_tokens;
-
-      for (const block of contentBlocks) {
-        if (block.type === "tool_use") {
-          toolCalls.push({
+    for (const block of contentBlocks) {
+      if (block.type === "tool_use") {
+        chunks.push({
+          toolCall: {
             id: block.id,
             name: block.name,
             arguments: JSON.stringify(block.input),
-          });
-        }
+          },
+        });
       }
+    }
 
-      return {
-        content,
-        toolCalls,
-        usage: { inputTokens, outputTokens },
-        rawAssistantContent: contentBlocks,
-      };
-    }, {
-      signal,
-      onRetry: ({ attempt, maxRetries, reason }) => printRetry(attempt, maxRetries, reason),
+    chunks.push({
+      usage: {
+        inputTokens: finalMessage.usage.input_tokens,
+        outputTokens: finalMessage.usage.output_tokens,
+      },
     });
+
+    chunks.push({ done: true });
+
+    for (const chunk of chunks) {
+      yield chunk;
+    }
   }
 }

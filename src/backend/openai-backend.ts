@@ -1,9 +1,8 @@
 import OpenAI from "openai";
 import type { ToolDef } from "../tools/tools.js";
 import { withRetry } from "../core/agent-retry.js";
-import { stopSpinner, resetMarkdown, flushMarkdown, printRetry } from "../ui/index.js";
 import type { CompressionPipeline } from "../core/compress.js";
-import type { MessageHandler, StreamResult, BackendConfig, ToolResultEntry } from "./backend-types.js";
+import type { MessageHandler, StreamResult, BackendConfig, ToolResultEntry, StreamChunk } from "./backend-types.js";
 
 function toOpenAITools(tools: ToolDef[]): OpenAI.ChatCompletionTool[] {
   return tools.map((tool) => ({
@@ -123,8 +122,29 @@ export class OpenAIBackend implements MessageHandler {
   // ─── Streaming ────────────────────────────────────────────
 
   async stream(signal?: AbortSignal): Promise<StreamResult> {
-    return withRetry(async (retrySignal) => {
-      const stream = await this.client.chat.completions.create({
+    let content = "";
+    let toolCalls: StreamResult["toolCalls"] = [];
+    let inputTokens = 0;
+    let outputTokens = 0;
+
+    for await (const chunk of this.streamChunk(signal)) {
+      if (chunk.content) {
+        content += chunk.content;
+        this.emitText(chunk.content);
+      }
+      if (chunk.toolCall) toolCalls.push(chunk.toolCall);
+      if (chunk.usage) {
+        inputTokens = chunk.usage.inputTokens;
+        outputTokens = chunk.usage.outputTokens;
+      }
+    }
+
+    return { content, toolCalls, usage: { inputTokens, outputTokens } };
+  }
+
+  async *streamChunk(signal?: AbortSignal): AsyncGenerator<StreamChunk> {
+    const stream = await withRetry(async (retrySignal) => {
+      return this.client.chat.completions.create({
         model: this.model,
         max_tokens: 16384,
         tools: toOpenAITools(this.tools),
@@ -132,62 +152,54 @@ export class OpenAIBackend implements MessageHandler {
         stream: true,
         stream_options: { include_usage: true },
       }, { signal: retrySignal });
+    }, { signal, onRetry: () => { } });
 
-      let content = "";
-      const toolCalls: StreamResult["toolCalls"] = [];
-      let inputTokens = 0;
-      let outputTokens = 0;
-      let firstText = true;
+    const pendingTools: Map<number, { id: string; name: string; arguments: string }> = new Map();
+    let prevIndex = -1;
 
-      if (!this.isSubAgent) resetMarkdown();
+    for await (const chunk of stream) {
+      if (chunk.usage) {
+        yield { usage: { inputTokens: chunk.usage.prompt_tokens, outputTokens: chunk.usage.completion_tokens } };
+      }
 
-      const pendingTools: Map<number, { id: string; name: string; arguments: string }> = new Map();
+      const delta = chunk.choices[0]?.delta;
+      if (!delta) continue;
 
-      for await (const chunk of stream) {
-        if (chunk.usage) {
-          inputTokens = chunk.usage.prompt_tokens;
-          outputTokens = chunk.usage.completion_tokens;
-        }
+      if (delta.content) {
+        yield { content: delta.content };
+      }
 
-        const delta = chunk.choices[0]?.delta;
-        if (!delta) continue;
-
-        if (delta.content) {
-          if (firstText) { if (!this.isSubAgent) stopSpinner(); this.emitText("\n"); firstText = false; }
-          this.emitText(delta.content);
-          content += delta.content;
-        }
-
-        if (delta.tool_calls) {
-          for (const tc of delta.tool_calls) {
-            const existing = pendingTools.get(tc.index);
-            if (existing) {
-              if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-            } else {
-              pendingTools.set(tc.index, {
-                id: tc.id || "",
-                name: tc.function?.name || "",
-                arguments: tc.function?.arguments || "",
-              });
+      if (delta.tool_calls) {
+        for (const tc of delta.tool_calls) {
+          if (tc.index !== prevIndex && prevIndex >= 0) {
+            const completed = pendingTools.get(prevIndex);
+            if (completed) {
+              // return the completed tool call
+              yield { toolCall: completed };
+              pendingTools.delete(prevIndex);
             }
           }
+
+          const existing = pendingTools.get(tc.index);
+          if (existing) {
+            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
+          } else {
+            pendingTools.set(tc.index, {
+              id: tc.id || "",
+              name: tc.function?.name || "",
+              arguments: tc.function?.arguments || "",
+            });
+          }
+
+          prevIndex = tc.index;
         }
       }
+    }
 
-      if (!this.isSubAgent) flushMarkdown();
+    for (const [, tc] of pendingTools) {
+      yield { toolCall: tc };
+    }
 
-      for (const [, tc] of pendingTools) {
-        toolCalls.push(tc);
-      }
-
-      return {
-        content,
-        toolCalls,
-        usage: { inputTokens, outputTokens },
-      };
-    }, {
-      signal,
-      onRetry: ({ attempt, maxRetries, reason }) => printRetry(attempt, maxRetries, reason),
-    });
+    yield { done: true };
   }
 }
