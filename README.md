@@ -1,334 +1,250 @@
-# Claude Code Mini v2.0
+<p align="center">
+  <strong>claude-code-mini</strong>
+</p>
 
-[English](README_EN.md) | 简体中文
+<p align="center">
+  <a href="./README_EN.md">English</a> | 中文
+</p>
 
-一个从零实现的极简 AI 编程代理，灵感来自 [Claude Code](https://claude.ai/code)。
+<p align="center">
+  一个受 Claude Code 启发的轻量级终端 AI 编码助手，使用 TypeScript 构建。
+</p>
 
-> Forked from [Windy3f3f3f3f/claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch)，在原项目基础上进行了大量改进。
+> 本项目 Fork 自 [claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch)，在此基础上进行了大量重构和功能扩展。
+
+---
 
 ## 特性
 
-- **双后端支持**：Anthropic Claude（原生）+ 任意 OpenAI 兼容 API
-- **真流式工具调用**：双后端均实现真流式——文本实时输出，工具调用在 content block 完成时立即产出，支持并行执行安全工具
-- **三层模型架构**：pro / lite / mini 三级模型，自动路由 sub-agent 到低成本模型
-- **13 个内置工具**：read_file、write_file、edit_file、list_files、grep_search、run_shell、skill、agent、task_create、task_update、task_list、web_search、ask_user
-- **4 种内置代理**：explore（只读探索）、plan（规划）、general（全功能）、compact（压缩）
-- **自定义扩展**：通过 `.ccmini/agents/` 和 `.ccmini/skills/` 定义专属代理和技能
-- **3 层上下文压缩**：budget → snip → microcompact
-- **5 种权限模式**：default / plan / acceptEdits / bypassPermissions / dontAsk
-- **会话持久化**：自动保存对话，`--resume` 恢复上次会话
-- **记忆系统**：按项目存储 user / feedback / project / reference 四类记忆
-- **Tab 补全**：REPL 中支持命令和技能的 Tab 补全
-- **扩展思考**：支持 Claude 4.6 的 adaptive thinking
-- **任务追踪**：内置任务系统，支持创建、更新、列出任务
-- **文件变更追踪**：自动记录每轮的 `write_file`/`edit_file` 操作，支持查看变更历史和回滚
-- **完整测试覆盖**：Vitest 单元测试框架，350 个测试用例，覆盖核心模块
+- **双后端支持** — 兼容 Anthropic (Claude) 和 OpenAI 协议的 API，一行命令切换
+- **三级模型分层** — pro（主对话）/ lite（子代理）/ mini（摘要），按任务复杂度自动路由，优化成本
+- **21 个内置工具** — 文件读写、代码搜索、Shell 执行、Git 操作、Web 搜索、任务管理等
+- **子代理系统** — 内置 explore / plan / general 三种类型，支持自定义代理，隔离执行
+- **技能扩展** — 通过 `.ccmini/skills/` 目录定义可复用的技能，支持 inline 和 fork 两种模式
+- **上下文压缩** — 4 级压缩流水线（budget → snip → microcompact → auto-compact），前 3 级零 API 成本
+- **权限管理** — 5 种权限模式，危险命令自动检测，支持按规则持久化
+- **流式输出** — 实时流式文本 + 并行安全工具自动并行执行
+- **会话持久化** — 自动保存/恢复会话，支持 `--resume` 续接
+- **文件变更追踪** — 按轮次记录文件变更，支持 `/revert` 一键撤销
+- **记忆系统** — 4 种类型的持久化文件记忆（user / feedback / project / reference）
+- **API 重试** — 指数退避自动重试（429 / 503 / 529 / 超时）
+- **Tab 补全** — REPL 模式下按 Tab 自动补全命令和技能
 
 ## 快速开始
 
+### 安装
+
 ```bash
-# 安装依赖
+git clone https://github.com/your-repo/claude-code-mini.git
+cd claude-code-mini
 npm install
-
-# 构建
 npm run build
-
-# 设置 API Key（二选一）
-export ANTHROPIC_API_KEY=sk-ant-...
-# 或使用 OpenAI 兼容接口
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://your-api.com/v1
-
-# 交互模式
-npm start
-
-# 单次执行
-node dist/cli.js "修复 src/app.ts 中的 bug"
-
-# 开发模式（构建 + 立即运行）
-npm run dev
 ```
 
-## CLI 参数
+### 配置 API
 
-```
-用法: claude-code-mini [选项] [提示词]
+交互式配置：
 
-选项:
-  --yolo, -y          跳过所有确认提示
-  --plan              只读模式，只分析不执行
-  --accept-edits      自动批准文件编辑，危险命令仍需确认
-  --dont-ask          自动拒绝所有需要确认的操作（适用于 CI）
-  --thinking          启用扩展思考（仅 Anthropic）
-  --model, -m MODEL   指定模型
-  --api-base URL      使用 OpenAI 兼容端点
-  --resume            恢复上次会话
-  --connect           交互式连接 API 提供商并保存配置
-  --max-cost USD      费用上限（美元）
-  --max-turns N       最大轮次限制
-  --help, -h          显示帮助
+```bash
+claude-code-mini --connect
 ```
 
-## REPL 命令
+或手动编辑 `~/.ccmini/settings.json`：
 
-交互模式下可用：
+```json
+{
+  "api": {
+    "provider": "openai",
+    "baseUrl": "https://your-api-endpoint.com/v1",
+    "apiKey": "sk-xxx"
+  },
+  "models": {
+    "pro": "your-main-model",
+    "lite": "your-lite-model",
+    "mini": "your-mini-model"
+  }
+}
+```
+
+### 使用
+
+**交互式 REPL：**
+
+```bash
+claude-code-mini
+```
+
+**一次性命令：**
+
+```bash
+claude-code-mini "修复 src/app.ts 中的 bug"
+claude-code-mini --yolo "运行所有测试并修复失败"
+claude-code-mini --plan "你会如何重构这个项目？"
+claude-code-mini --model gpt-4o "hello"
+claude-code-mini --resume  # 恢复上次会话
+```
+
+## CLI 选项
+
+| 选项 | 缩写 | 说明 |
+|------|------|------|
+| `--yolo` | `-y` | 跳过所有确认（bypassPermissions 模式） |
+| `--plan` | | 计划模式：只读，描述变更但不执行 |
+| `--accept-edits` | | 自动批准文件编辑，危险 Shell 命令仍需确认 |
+| `--dont-ask` | | 自动拒绝需确认的操作（适合 CI） |
+| `--thinking` | | 启用扩展思考（仅 Anthropic） |
+| `--model` | `-m` | 指定模型（默认从配置读取或 `glm-5`） |
+| `--resume` | | 恢复上次会话 |
+| `--max-turns N` | | 限制代理循环最大轮次 |
+| `--connect` | | 交互式配置 API 提供商 |
+| `--help` | `-h` | 显示帮助 |
+
+## REPL 斜杠命令
 
 | 命令 | 说明 |
 |------|------|
 | `/help` | 显示所有可用命令 |
-| `/model [tier] [name]` | 显示/切换模型或层级 |
-| `/clear` | 清空对话历史 |
-| `/cost` | 显示 token 用量和费用 |
+| `/clear` | 清除对话历史 |
 | `/compact` | 手动压缩对话 |
+| `/model [tier] [name]` | 查看/切换模型或层级（pro/lite/mini） |
 | `/memory` | 列出已保存的记忆 |
+| `/connect` | 交互式连接 API 提供商 |
+| `/trace` | 按轮次显示所有文件变更 |
+| `/revert` | 撤销上一轮的文件变更 |
 | `/skills` | 列出可用技能 |
-| `/connect` | 交互式连接 API 提供商（类型、URL、Key、模型） |
-| `/trace` | 查看每轮的文件变更历史 |
-| `/revert` | 回滚最后一轮的文件变更 |
-| `/<技能名> [参数]` | 调用技能 |
+| `/<skill-name>` | 调用用户定义的技能 |
 
-支持 Tab 补全命令和技能名称。
+提示：输入 `/` 后按 **Tab** 键可查看所有可用命令和技能。
 
-## 三层模型系统
+## 内置工具
+
+### 文件操作
+
+| 工具 | 说明 |
+|------|------|
+| `read_file` | 读取文件内容，支持分页 |
+| `write_file` | 写入/创建文件 |
+| `edit_file` | 精确字符串匹配替换编辑 |
+
+### 搜索
+
+| 工具 | 说明 |
+|------|------|
+| `list_files` | Glob 模式文件搜索 |
+| `grep_search` | 正则表达式代码搜索 |
+| `web_search` | DuckDuckGo 网络搜索 |
+
+### Git
+
+| 工具 | 说明 |
+|------|------|
+| `git_status` | 仓库状态 |
+| `git_diff` / `git_diff_staged` | 查看变更 |
+| `git_log` / `git_show` / `git_blame` | 提交历史 |
+| `git_branch` / `git_remote` | 分支和远程 |
+
+### 执行
+
+| 工具 | 说明 |
+|------|------|
+| `run_shell` | 执行 Shell 命令（支持超时） |
+
+### 代理
+
+| 工具 | 说明 |
+|------|------|
+| `agent` | 启动子代理处理独立任务 |
+| `skill` | 调用已注册的技能 |
+| `ask_user` | 向用户提问并等待回复 |
+
+### 任务管理
+
+| 工具 | 说明 |
+|------|------|
+| `task_create` / `task_update` / `task_list` | 创建、更新、列出任务 |
+
+## 权限模式
+
+| 模式 | 说明 |
+|------|------|
+| `default` | 读取类自动允许，写入类需确认，危险命令需确认 |
+| `plan` | 只读模式，拒绝所有写入操作 |
+| `acceptEdits` | 自动批准文件编辑，危险 Shell 仍需确认 |
+| `bypassPermissions` | 跳过所有权限检查（`--yolo`） |
+| `dontAsk` | 自动拒绝需确认的操作（适合 CI） |
+
+权限规则可持久化到 `.ccmini/settings.json`，支持 allow/deny 列表和通配符匹配。
+
+## 三级模型系统
 
 | 层级 | 用途 | 默认模型 |
-|------|------|----------|
-| **pro** | 主对话、复杂推理、general agent | `glm-5` |
-| **lite** | sub-agent、explore、plan | `minimax-m2.5` |
-| **mini** | compact 压缩、简单查询 | `kimi-k2.5` |
+|------|------|---------|
+| **pro** | 主对话、复杂推理 | `glm-5` |
+| **lite** | 子代理、探索、规划 | `minimax-m2.5` |
+| **mini** | 摘要、快速查询 | `kimi-k2.5` |
 
 配置优先级（高 → 低）：
-1. Runtime: `/model pro <模型名>`
-2. 环境变量: `MINI_CLAUDE_MODEL_PRO` / `_LITE` / `_MINI`
-3. 配置文件: `.ccmini/settings.json`
-4. 内置默认值
+1. 运行时：`/model pro <name>` 命令
+2. 配置文件：`.ccmini/settings.json` → `{ "models": { "pro": "..." } }`
+3. 内置默认值
+
+子代理自动路由：explore → lite，plan → lite，general → pro，compact → mini。
+
+## 扩展
+
+### 自定义技能
+
+在 `.ccmini/skills/<name>/SKILL.md` 创建技能文件：
+
+```markdown
+---
+name: commit
+description: Generate a git commit message
+user-invocable: true
+context: inline
+---
+
+分析当前 git diff，生成规范的 commit message。
+```
+
+### 自定义代理
+
+在 `.ccmini/agents/<name>.md` 创建代理配置：
+
+```markdown
+---
+name: reviewer
+description: Code review agent
+allowed-tools: read_file, grep_search, list_files
+model: lite
+---
+
+你是一个代码审查专家。审查代码中的 bug、安全漏洞和性能问题。
+```
 
 ## 项目结构
 
 ```
 src/
-├── cli.ts                    # 主入口
-├── cli/
-│   ├── args.ts               # 参数解析
-│   ├── commands.ts           # Slash 命令注册
-│   ├── config.ts             # API 配置解析
-│   └── repl.ts               # REPL 交互循环
-├── core/
-│   ├── agent.ts              # Agent 核心类（~450 行）
-│   ├── compress.ts           # 上下文压缩管线
-│   ├── agent-model.ts        # 模型切换逻辑
-│   ├── agent-retry.ts        # API 重试逻辑
-│   ├── model-tiers.ts        # 三层模型系统
-│   └── prompt.ts             # 系统提示词构建
-├── backend/                  # 后端抽象层（新增）
-│   ├── backend-types.ts      # MessageHandler 接口定义
-│   ├── anthropic-backend.ts  # Anthropic 后端实现
-│   ├── openai-backend.ts     # OpenAI 后端实现
-│   └── index.ts              # 模块导出
-├── tools/
-│   ├── definitions.ts        # 工具定义（Anthropic 格式）
-│   ├── dispatcher.ts         # 工具调度
-│   ├── executors.ts          # 工具实现
-│   ├── permissions.ts        # 权限检查
-│   └── tools.ts              # 模块导出
-├── ui/                       # UI 模块（重构）
-│   ├── colors.ts             # 颜色常量
-│   ├── spinner.ts            # 加载动画
-│   ├── markdown.ts           # Markdown 渲染
-│   ├── menu.ts               # 交互式菜单
-│   ├── output.ts             # 输出函数
-│   └── index.ts              # 模块导出
-├── storage/
-│   ├── session.ts            # 会话持久化
-│   └── memory.ts             # 记忆系统
-├── extensions/
-│   ├── skills.ts             # 技能发现与执行
-│   └── subagent.ts           # 子代理系统
-└── templates/
-    ├── system-prompt.md      # 系统提示词模板
-    └── plan-mode-prompt.md   # Plan 模式模板
-
-.ccmini/
-├── settings.json             # 项目配置
-├── agents/                   # 自定义代理
-│   └── *.md
-└── skills/                   # 自定义技能
-    └── */SKILL.md
+├── cli.ts                # 入口
+├── cli/                  # CLI（参数解析、REPL、命令）
+├── core/                 # 核心（Agent、压缩、模型分层、提示词）
+├── backend/              # API 后端（Anthropic / OpenAI）
+├── tools/                # 工具系统（定义、执行、权限）
+├── ui/                   # 终端 UI
+├── storage/              # 持久化（会话、记忆、文件追踪）
+└── extensions/           # 扩展（技能、子代理）
 ```
 
-## 架构概览
-
-### 执行流程
-
-```
-cli.ts → parseArgs() → resolveApiConfig() → new Agent() → chat() 或 runRepl()
-```
-
-### Agent 核心循环
-
-```
-用户输入 → 压缩管线 → 后端抽象层 → 流式 API 调用 → 实时解析响应
-                                              ├── 文本 → 实时输出到终端
-                                              └── 工具调用 → 流式产出 → 并行执行安全工具 → 结果入历史 → 继续循环
-```
-
-### 后端抽象层
-
-v2.0 引入了统一的后端抽象层，通过 `MessageHandler` 接口解耦 Agent 核心与具体 API 实现：
-
-| 组件 | 说明 |
-|------|------|
-| `MessageHandler` | 后端统一接口，定义消息管理和流式调用 |
-| `AnthropicBackend` | Anthropic API 实现，基于 SSE 事件迭代的真流式 |
-| `OpenAIBackend` | OpenAI 兼容 API 实现，增量 delta 流式 |
-
-两个后端均实现了**真流式工具调用**：文本实时输出，工具调用在各自 content block 完成时立即 yield，`chatLoop` 可在流式过程中并行启动安全工具的执行。新增后端只需实现 `MessageHandler` 接口，无需修改 Agent 核心代码。
-
-### 上下文压缩管线
-
-每次 API 调用前执行 3 层渐进式压缩（零 API 消耗的本地操作）：
-
-| 层级 | 名称 | 触发条件 | 策略 |
-|------|------|----------|------|
-| 1 | Budget | 上下文利用率 > 50% | 截断大的工具结果，保留头尾 |
-| 2 | Snip | 利用率超过阈值 | 用占位符替换旧的/重复的工具结果 |
-| 3 | Microcompact | 空闲超过 5 分钟 | 激进清除旧结果（prompt cache 已冷） |
-
-> 注：当利用率 > 85% 时，会调用 API 进行完整的对话摘要压缩。
-
-## 扩展系统
-
-### 自定义代理
-
-在 `.ccmini/agents/<名称>.md` 中定义：
-
-```yaml
----
-name: test-writer
-description: 编写单元测试的代理
-allowed-tools: read_file, write_file, grep_search
-model: lite
----
-
-你是一个专门的测试编写代理。为源代码编写单元测试。
-```
-
-### 自定义技能
-
-在 `.ccmini/skills/<名称>/SKILL.md` 中定义：
-
-```yaml
----
-name: commit
-description: 生成 Git commit 消息
-user-invocable: true
-mode: inline
----
-
-根据 git diff 生成 commit 消息。格式：
-- 第一行：简短摘要
-- 空行
-- 详细描述
-```
-
-在 REPL 中通过 `/commit` 调用。
-
-### 权限与 API 配置
-
-在 `.ccmini/settings.json` 中配置：
-
-```json
-{
-  "permissionMode": "default",
-  "api": {
-    "provider": "openai",           // "anthropic" 或 "openai"
-    "apiKey": "sk-xxx",             // 可选，优先使用环境变量
-    "baseUrl": "https://api.example.com/v1"  // 可选
-  },
-  "models": {
-    "pro": "claude-sonnet-4-20250514",
-    "lite": "claude-3-5-haiku-20241022",
-    "mini": "claude-3-5-haiku-20241022"
-  },
-  "tools": {
-    "read_file": "allow",
-    "write_file": "ask",
-    "run_shell": "ask"
-  }
-}
-```
-
-也可以通过 `/connect` 命令交互式配置，程序会引导你输入：
-1. 提供商类型（Anthropic / OpenAI 兼容）
-2. Base URL（Anthropic 可选，其他必填）
-3. API Key
-4. Pro / Lite / Mini 模型名称
-
-**优先级**：命令行参数 > 环境变量 > 配置文件
-
-## 环境变量
-
-| 变量 | 说明 |
-|------|------|
-| `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
-| `ANTHROPIC_BASE_URL` | Anthropic 自定义端点（可选） |
-| `OPENAI_API_KEY` | OpenAI 兼容 API 密钥 |
-| `OPENAI_BASE_URL` | OpenAI 兼容端点 |
-| `MINI_CLAUDE_MODEL` | 覆盖 pro 层级模型 |
-| `MINI_CLAUDE_MODEL_PRO` | 覆盖 pro 层级模型 |
-| `MINI_CLAUDE_MODEL_LITE` | 覆盖 lite 层级模型 |
-| `MINI_CLAUDE_MODEL_MINI` | 覆盖 mini 层级模型 |
-
-## 使用示例
+## 开发
 
 ```bash
-# 基本使用
-claude-code-mini "解释这个项目的架构"
-
-# 跳过确认，全自动执行
-claude-code-mini --yolo "运行所有测试并修复失败的用例"
-
-# 只读分析模式
-claude-code-mini --plan "如何重构这个模块？"
-
-# 自动批准编辑
-claude-code-mini --accept-edits "给 api.ts 添加错误处理"
-
-# 设置费用和轮次上限
-claude-code-mini --max-cost 0.50 --max-turns 20 "实现功能 X"
-
-# 使用 OpenAI 兼容接口
-OPENAI_API_KEY=sk-xxx claude-code-mini --api-base https://api.example.com/v1 --model gpt-4o "你好"
-
-# 恢复上次对话
-claude-code-mini --resume
+npm run build          # 编译 TypeScript
+npm run dev            # 编译并启动 REPL
+npx tsc --noEmit       # 类型检查
+npm test               # 运行测试
 ```
 
-## 依赖
-
-- `@anthropic-ai/sdk` — Anthropic API 客户端
-- `openai` — OpenAI API 客户端
-- `chalk` — 终端颜色
-- `glob` — 文件模式匹配
-- `duck-duck-scrape` — DuckDuckGo 网页搜索
-- `vitest` — 单元测试框架
-- `@vitest/coverage-v8` — 测试覆盖率
-
-## 测试
-
-```bash
-# 运行所有测试
-npm test
-
-# 监听模式
-npm run test:watch
-
-# 生成覆盖率报告
-npm run test:coverage
-```
-
-当前覆盖模块：工具定义、权限检查、模型分层、上下文压缩、记忆系统、CLI 参数、文件变更追踪等。
-
-## 许可证
+## License
 
 MIT

@@ -1,326 +1,249 @@
-# Claude Code Mini v2.0
+<p align="center">
+  <strong>claude-code-mini</strong>
+</p>
 
-English | [简体中文](README.md)
+<p align="center">
+  English | <a href="./README.md">中文</a>
+</p>
 
-A minimal AI coding agent built from scratch in TypeScript, inspired by [Claude Code](https://claude.ai/code).
+<p align="center">
+  A lightweight terminal AI coding assistant inspired by Claude Code, built with TypeScript.
+</p>
 
-> Forked from [Windy3f3f3f3f/claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch), heavily modified with many improvements.
+> Forked from [claude-code-from-scratch](https://github.com/Windy3f3f3f3f/claude-code-from-scratch) with extensive refactoring and feature additions.
+
+---
 
 ## Features
 
-- **Dual backend support**: Anthropic Claude (native) + any OpenAI-compatible API
-- **Real-time streaming**: Both backends use true streaming — text outputs in real-time, tool calls yield immediately on completion for parallel execution
-- **Three-tier model system**: pro / lite / mini levels with automatic sub-agent routing to cost-effective models
-- **13 built-in tools**: read_file, write_file, edit_file, list_files, grep_search, run_shell, skill, agent, task_create, task_update, task_list, web_search, ask_user
-- **4 built-in agents**: explore (read-only), plan (analysis), general (full tools), compact (summarization)
-- **Custom extensions**: Define agents and skills via `.ccmini/agents/` and `.ccmini/skills/`
-- **3-tier context compression**: budget → snip → microcompact
-- **5 permission modes**: default / plan / acceptEdits / bypassPermissions / dontAsk
-- **Session persistence**: Auto-saves conversations, `--resume` to restore
-- **Memory system**: Per-project storage with 4 types — user / feedback / project / reference
-- **Tab completion**: Commands and skills in REPL
-- **Extended thinking**: Supports Claude 4.6 adaptive thinking
-- **Task tracking**: Built-in task system for creating, updating, and listing tasks
-- **File change tracking**: Automatic tracking of `write_file`/`edit_file` operations per turn, with change history and rollback support
-- **Complete test coverage**: Vitest unit test framework, 350 test cases covering core modules
+- **Dual Backend Support** — Compatible with both Anthropic (Claude) and OpenAI protocol APIs, switch with a single flag
+- **Three-Tier Model System** — pro (main chat) / lite (sub-agents) / mini (summarization), auto-routed by task complexity for cost optimization
+- **21 Built-in Tools** — File I/O, code search, shell execution, Git operations, web search, task management, and more
+- **Sub-Agent System** — Built-in explore / plan / general agent types, plus custom agent support with isolated execution
+- **Skill Extensions** — Define reusable skills via `.ccmini/skills/` directory with inline and fork execution modes
+- **Context Compression** — 4-tier pipeline (budget → snip → microcompact → auto-compact), first 3 tiers at zero API cost
+- **Permission Management** — 5 permission modes with dangerous command detection and persistent rule-based policies
+- **Streaming Output** — Real-time streaming text with automatic parallel execution for parallel-safe tools
+- **Session Persistence** — Auto-save/restore sessions with `--resume` support
+- **File Change Tracking** — Per-turn change recording with `/revert` for one-click undo
+- **Memory System** — 4-type persistent file-based memory (user / feedback / project / reference)
+- **API Retry** — Exponential backoff auto-retry for 429 / 503 / 529 / timeouts
+- **Tab Completion** — Tab auto-completion for commands and skills in REPL mode
 
 ## Quick Start
 
+### Install
+
 ```bash
-# Install dependencies
+git clone https://github.com/your-repo/claude-code-mini.git
+cd claude-code-mini
 npm install
-
-# Build
 npm run build
+```
 
-# Set API key (choose one)
-export ANTHROPIC_API_KEY=sk-ant-...
-# Or use an OpenAI-compatible endpoint
-export OPENAI_API_KEY=sk-...
-export OPENAI_BASE_URL=https://your-api.com/v1
+### Configure API
 
-# Interactive mode
-npm start
+Interactive setup:
 
-# One-shot mode
-node dist/cli.js "fix the bug in src/app.ts"
+```bash
+claude-code-mini --connect
+```
 
-# Dev mode (build + run immediately)
-npm run dev
+Or manually edit `~/.ccmini/settings.json`:
+
+```json
+{
+  "api": {
+    "provider": "openai",
+    "baseUrl": "https://your-api-endpoint.com/v1",
+    "apiKey": "sk-xxx"
+  },
+  "models": {
+    "pro": "your-main-model",
+    "lite": "your-lite-model",
+    "mini": "your-mini-model"
+  }
+}
+```
+
+### Usage
+
+**Interactive REPL:**
+
+```bash
+claude-code-mini
+```
+
+**One-shot mode:**
+
+```bash
+claude-code-mini "fix the bug in src/app.ts"
+claude-code-mini --yolo "run all tests and fix failures"
+claude-code-mini --plan "how would you refactor this?"
+claude-code-mini --model gpt-4o "hello"
+claude-code-mini --resume  # Resume last session
 ```
 
 ## CLI Options
 
-```
-Usage: claude-code-mini [options] [prompt]
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--yolo` | `-y` | Skip all confirmations (bypassPermissions mode) |
+| `--plan` | | Plan mode: read-only, describe changes without executing |
+| `--accept-edits` | | Auto-approve file edits, still confirm dangerous shell commands |
+| `--dont-ask` | | Auto-deny anything needing confirmation (for CI) |
+| `--thinking` | | Enable extended thinking (Anthropic only) |
+| `--model` | `-m` | Model to use (default from config or `glm-5`) |
+| `--resume` | | Resume the last session |
+| `--max-turns N` | | Stop after N agentic turns |
+| `--connect` | | Interactively connect to an API provider |
+| `--help` | `-h` | Show help |
 
-Options:
-  --yolo, -y          Skip all confirmation prompts
-  --plan              Read-only mode, analyze without executing
-  --accept-edits      Auto-approve file edits, still confirm dangerous commands
-  --dont-ask          Auto-deny all confirmations (for CI)
-  --thinking          Enable extended thinking (Anthropic only)
-  --model, -m MODEL   Specify model
-  --api-base URL      Use an OpenAI-compatible endpoint
-  --resume            Resume the last session
-  --connect           Interactively connect to API provider and save config
-  --max-cost USD      Cost ceiling in USD
-  --max-turns N       Maximum number of agentic turns
-  --help, -h          Show help
-```
-
-## REPL Commands
-
-Available in interactive mode:
+## REPL Slash Commands
 
 | Command | Description |
 |---------|-------------|
 | `/help` | Show all available commands |
-| `/model [tier] [name]` | Show/switch model or tier |
 | `/clear` | Clear conversation history |
-| `/cost` | Show token usage and cost |
-| `/compact` | Manually compact the conversation |
+| `/compact` | Manually compact conversation |
+| `/model [tier] [name]` | Show/switch model or tier (pro/lite/mini) |
 | `/memory` | List saved memories |
-| `/skills` | List available skills |
-| `/connect` | Interactively connect to API provider (type, URL, key, model) |
-| `/trace` | Show file change history by turn |
+| `/connect` | Interactively connect to an API provider |
+| `/trace` | Show all file changes by turn |
 | `/revert` | Revert the last turn's file changes |
-| `/<skill-name> [args]` | Invoke a skill |
+| `/skills` | List available skills |
+| `/<skill-name>` | Invoke a user-defined skill |
 
-Tab completion supported for commands and skill names.
+Tip: Press **Tab** after typing `/` to see all available commands and skills.
+
+## Built-in Tools
+
+### File Operations
+
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents with pagination |
+| `write_file` | Write/create files |
+| `edit_file` | Edit files via exact string match replacement |
+
+### Search
+
+| Tool | Description |
+|------|-------------|
+| `list_files` | Glob pattern file search |
+| `grep_search` | Regex code search |
+| `web_search` | DuckDuckGo web search |
+
+### Git
+
+| Tool | Description |
+|------|-------------|
+| `git_status` | Repository status |
+| `git_diff` / `git_diff_staged` | View changes |
+| `git_log` / `git_show` / `git_blame` | Commit history |
+| `git_branch` / `git_remote` | Branches and remotes |
+
+### Execution
+
+| Tool | Description |
+|------|-------------|
+| `run_shell` | Execute shell commands (with timeout) |
+
+### Agent
+
+| Tool | Description |
+|------|-------------|
+| `agent` | Launch sub-agents for independent tasks |
+| `skill` | Invoke registered skills |
+| `ask_user` | Ask the user a question and wait for response |
+
+### Task Management
+
+| Tool | Description |
+|------|-------------|
+| `task_create` / `task_update` / `task_list` | Create, update, and list tasks |
+
+## Permission Modes
+
+| Mode | Description |
+|------|-------------|
+| `default` | Read ops auto-allowed, write ops need confirmation, dangerous commands need confirmation |
+| `plan` | Read-only mode, all write operations denied |
+| `acceptEdits` | Auto-approve file edits, dangerous shell commands still need confirmation |
+| `bypassPermissions` | Skip all permission checks (`--yolo`) |
+| `dontAsk` | Auto-deny anything needing confirmation (for CI) |
+
+Permission rules can be persisted to `.ccmini/settings.json` with allow/deny lists and wildcard matching.
 
 ## Three-Tier Model System
 
 | Tier | Usage | Default Model |
 |------|-------|---------------|
-| **pro** | Main conversation, complex reasoning, general agent | `glm-5` |
-| **lite** | Sub-agents, explore, plan | `minimax-m2.5` |
-| **mini** | Compact summarization, quick queries | `kimi-k2.5` |
+| **pro** | Main conversation, complex reasoning | `glm-5` |
+| **lite** | Sub-agents, exploration, planning | `minimax-m2.5` |
+| **mini** | Summarization, quick queries | `kimi-k2.5` |
 
 Configuration priority (high → low):
 1. Runtime: `/model pro <name>` command
-2. Environment: `MINI_CLAUDE_MODEL_PRO` / `_LITE` / `_MINI`
-3. Config file: `.ccmini/settings.json`
-4. Built-in defaults
+2. Config file: `.ccmini/settings.json` → `{ "models": { "pro": "..." } }`
+3. Built-in defaults
+
+Sub-agent auto-routing: explore → lite, plan → lite, general → pro, compact → mini.
+
+## Extensions
+
+### Custom Skills
+
+Create a skill file at `.ccmini/skills/<name>/SKILL.md`:
+
+```markdown
+---
+name: commit
+description: Generate a git commit message
+user-invocable: true
+context: inline
+---
+
+Analyze the current git diff and generate a conventional commit message.
+```
+
+### Custom Agents
+
+Create an agent config at `.ccmini/agents/<name>.md`:
+
+```markdown
+---
+name: reviewer
+description: Code review agent
+allowed-tools: read_file, grep_search, list_files
+model: lite
+---
+
+You are a code review expert. Review code for bugs, security vulnerabilities, and performance issues.
+```
 
 ## Project Structure
 
 ```
 src/
-├── cli.ts                    # Main entry point
-├── cli/
-│   ├── args.ts               # Argument parsing
-│   ├── commands.ts           # Slash command registry
-│   ├── config.ts             # API config resolution
-│   └── repl.ts               # Interactive REPL loop
-├── core/
-│   ├── agent.ts              # Core Agent class (~450 lines)
-│   ├── compress.ts           # Context compression pipeline
-│   ├── agent-model.ts        # Model switch logic
-│   ├── agent-retry.ts        # API retry logic
-│   ├── model-tiers.ts        # Three-tier model system
-│   └── prompt.ts             # System prompt builder
-├── backend/                  # Backend abstraction layer (new)
-│   ├── backend-types.ts      # MessageHandler interface
-│   ├── anthropic-backend.ts  # Anthropic backend implementation
-│   ├── openai-backend.ts     # OpenAI backend implementation
-│   └── index.ts              # Module exports
-├── tools/
-│   ├── definitions.ts        # Tool definitions (Anthropic format)
-│   ├── dispatcher.ts         # Tool dispatch
-│   ├── executors.ts          # Tool implementations
-│   ├── permissions.ts        # Permission checks
-│   └── tools.ts              # Module exports
-├── ui/                       # UI module (refactored)
-│   ├── colors.ts             # Color constants
-│   ├── spinner.ts            # Loading animation
-│   ├── markdown.ts           # Markdown rendering
-│   ├── menu.ts               # Interactive menus
-│   ├── output.ts             # Output functions
-│   └── index.ts              # Module exports
-├── storage/
-│   ├── session.ts            # Session persistence
-│   └── memory.ts             # Memory system
-├── extensions/
-│   ├── skills.ts             # Skill discovery and execution
-│   └── subagent.ts           # Sub-agent system
-└── templates/
-    ├── system-prompt.md      # System prompt template
-    └── plan-mode-prompt.md   # Plan mode template
-
-.ccmini/
-├── settings.json             # Project configuration
-├── agents/                   # Custom agents
-│   └── *.md
-└── skills/                   # Custom skills
-    └── */SKILL.md
+├── cli.ts                # Entry point
+├── cli/                  # CLI (args, REPL, commands)
+├── core/                 # Core (Agent, compression, model tiers, prompts)
+├── backend/              # API backends (Anthropic / OpenAI)
+├── tools/                # Tool system (definitions, executors, permissions)
+├── ui/                   # Terminal UI
+├── storage/              # Persistence (sessions, memory, file tracker)
+└── extensions/           # Extensions (skills, sub-agents)
 ```
 
-## Architecture Overview
-
-### Execution Flow
-
-```
-cli.ts → parseArgs() → resolveApiConfig() → new Agent() → chat() or runRepl()
-```
-
-### Agent Core Loop
-
-```
-User input → Compression pipeline → Backend abstraction → Streaming API call → Parse response in real-time
-                                                                              ├── Text → Stream to terminal
-                                                                              └── Tool call → Yield on completion → Execute safe tools in parallel → Add result to history → Continue loop
-```
-
-### Backend Abstraction Layer
-
-v2.0 introduces a unified backend abstraction layer, decoupling Agent core from specific API implementations via the `MessageHandler` interface:
-
-| Component | Description |
-|-----------|-------------|
-| `MessageHandler` | Unified backend interface for message management and streaming |
-| `AnthropicBackend` | Anthropic API implementation with SSE event-based real-time streaming |
-| `OpenAIBackend` | OpenAI-compatible API implementation with incremental delta streaming |
-
-Both backends implement **true streaming tool calls**: text is output in real-time, and tool calls are yielded immediately as each content block completes, allowing `chatLoop` to start executing parallel-safe tools during the stream. To add a new backend, simply implement the `MessageHandler` interface without modifying Agent core code.
-
-### Context Compression Pipeline
-
-A 3-tier progressive compression pipeline runs before each API call (zero API cost, local operations):
-
-| Tier | Name | Trigger | Strategy |
-|------|------|---------|----------|
-| 1 | Budget | Context utilization > 50% | Truncate large tool results, keeping head and tail |
-| 2 | Snip | Utilization exceeds threshold | Replace stale/duplicate tool results with placeholder |
-| 3 | Microcompact | Idle for > 5 minutes | Aggressively clear old results (prompt cache is cold) |
-
-> Note: When utilization > 85%, an API call is made for full conversation summarization.
-
-## Extension System
-
-### Custom Agents
-
-Define in `.ccmini/agents/<name>.md`:
-
-```yaml
----
-name: test-writer
-description: Agent for writing unit tests
-allowed-tools: read_file, write_file, grep_search
-model: lite
----
-
-You are a specialized agent for writing unit tests. Write tests for the source code.
-```
-
-### Custom Skills
-
-Define in `.ccmini/skills/<name>/SKILL.md`:
-
-```yaml
----
-name: commit
-description: Generate Git commit message
-user-invocable: true
-mode: inline
----
-
-Generate a commit message based on git diff. Format:
-- First line: short summary
-- Blank line
-- Detailed description
-```
-
-Invoke via `/commit` in REPL.
-
-### Permission Configuration
-
-Configure in `.ccmini/settings.json`:
-
-```json
-{
-  "permissionMode": "default",
-  "models": {
-    "pro": "claude-sonnet-4-20250514",
-    "lite": "claude-3-5-haiku-20241022",
-    "mini": "claude-3-5-haiku-20241022"
-  },
-  "tools": {
-    "read_file": "allow",
-    "write_file": "ask",
-    "run_shell": "ask"
-  }
-}
-```
-
-You can also use the `/connect` command to configure interactively. It will guide you through:
-1. Provider type (Anthropic / OpenAI-compatible)
-2. Base URL (optional for Anthropic, required for others)
-3. API Key
-4. Pro / Lite / Mini model names
-
-## Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key |
-| `ANTHROPIC_BASE_URL` | Custom Anthropic endpoint (optional) |
-| `OPENAI_API_KEY` | OpenAI-compatible API key |
-| `OPENAI_BASE_URL` | OpenAI-compatible endpoint |
-| `MINI_CLAUDE_MODEL` | Override pro tier model |
-| `MINI_CLAUDE_MODEL_PRO` | Override pro tier model |
-| `MINI_CLAUDE_MODEL_LITE` | Override lite tier model |
-| `MINI_CLAUDE_MODEL_MINI` | Override mini tier model |
-
-## Usage Examples
+## Development
 
 ```bash
-# Basic usage
-claude-code-mini "explain the architecture of this project"
-
-# Skip confirmations, fully automatic
-claude-code-mini --yolo "run all tests and fix failures"
-
-# Read-only analysis mode
-claude-code-mini --plan "how would you refactor this module?"
-
-# Auto-approve edits
-claude-code-mini --accept-edits "add error handling to api.ts"
-
-# Set cost and turn limits
-claude-code-mini --max-cost 0.50 --max-turns 20 "implement feature X"
-
-# Use an OpenAI-compatible endpoint
-OPENAI_API_KEY=sk-xxx claude-code-mini --api-base https://api.example.com/v1 --model gpt-4o "hello"
-
-# Resume the last conversation
-claude-code-mini --resume
+npm run build          # Compile TypeScript
+npm run dev            # Build and start REPL
+npx tsc --noEmit       # Type check
+npm test               # Run tests
 ```
-
-## Dependencies
-
-- `@anthropic-ai/sdk` — Anthropic API client
-- `openai` — OpenAI API client
-- `chalk` — Terminal colors
-- `glob` — File pattern matching
-- `duck-duck-scrape` — DuckDuckGo web search
-- `vitest` — Unit testing framework
-- `@vitest/coverage-v8` — Test coverage
-
-## Testing
-
-```bash
-# Run all tests
-npm test
-
-# Watch mode
-npm run test:watch
-
-# Generate coverage report
-npm run test:coverage
-```
-
-Currently covered: tool definitions, permissions, model tiers, context compression, memory system, CLI args, etc.
 
 ## License
 
