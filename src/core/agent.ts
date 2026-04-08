@@ -47,6 +47,7 @@ import {
 
 const CONTEXT_WINDOW_RESERVED_TOKENS = 20000;
 const AUTO_COMPACT_THRESHOLD = 0.85;
+const DEFAULT_MAX_TURNS = 50;
 
 interface AgentOptions {
   permissionMode?: PermissionMode;
@@ -111,7 +112,7 @@ export class Agent {
     this._model = options.model || getModelForTier("pro");
     this.isSubAgent = options.isSubAgent || false;
     this.mcpManager = options.mcpManager;
-    this.maxTurns = options.maxTurns;
+    this.maxTurns = options.maxTurns ?? (options.isSubAgent ? undefined : DEFAULT_MAX_TURNS);
     this.confirmFn = options.confirmFn;
     this.askUserFn = options.askUserFn;
     this.effectiveWindow = getContextWindow(this._model) - CONTEXT_WINDOW_RESERVED_TOKENS;

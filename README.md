@@ -19,11 +19,13 @@
 - **双后端支持** — 兼容 Anthropic (Claude) 和 OpenAI 协议的 API，一行命令切换
 - **三级模型分层** — pro（主对话）/ lite（子代理）/ mini（摘要），按任务复杂度自动路由，优化成本
 - **21 个内置工具** — 文件读写、代码搜索、Shell 执行、Git 操作、Web 搜索、任务管理等
+- **MCP 协议支持** — 通过 Model Context Protocol 连接外部工具服务器，支持 stdio 和 HTTP 传输，工具自动发现与命名空间隔离
 - **子代理系统** — 内置 explore / plan / general 三种类型，支持自定义代理，隔离执行
 - **技能扩展** — 通过 `.ccmini/skills/` 目录定义可复用的技能，支持 inline 和 fork 两种模式
 - **上下文压缩** — 4 级压缩流水线（budget → snip → microcompact → auto-compact），前 3 级零 API 成本
 - **权限管理** — 5 种权限模式，危险命令自动检测，支持按规则持久化
 - **流式输出** — 实时流式文本 + 并行安全工具自动并行执行
+- **StarDust 终端主题** — 精美的终端视觉样式，内置轻量级语法高亮（TS/JS、Python、JSON、Shell、Go、Rust 等）
 - **会话持久化** — 自动保存/恢复会话，支持 `--resume` 续接
 - **文件变更追踪** — 按轮次记录文件变更，支持 `/revert` 一键撤销
 - **记忆系统** — 4 种类型的持久化文件记忆（user / feedback / project / reference）
@@ -112,6 +114,7 @@ claude-code-mini --resume  # 恢复上次会话
 | `/trace` | 按轮次显示所有文件变更 |
 | `/revert` | 撤销上一轮的文件变更 |
 | `/skills` | 列出可用技能 |
+| `/mcp [reload [name]]` | 查看 MCP 服务器状态 / 重连指定或全部服务器 |
 | `/<skill-name>` | 调用用户定义的技能 |
 
 提示：输入 `/` 后按 **Tab** 键可查看所有可用命令和技能。
@@ -190,6 +193,40 @@ claude-code-mini --resume  # 恢复上次会话
 
 子代理自动路由：explore → lite，plan → lite，general → pro，compact → mini。
 
+## MCP 协议支持
+
+claude-code-mini 支持通过 [Model Context Protocol](https://modelcontextprotocol.io/) 连接外部工具服务器，自动发现并注册工具。
+
+### 配置
+
+在 `~/.ccmini/settings.json` 或项目级 `.ccmini/settings.json` 中添加 `mcpServers`：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    },
+    "remote-api": {
+      "url": "https://mcp-server.example.com/sse",
+      "headers": { "Authorization": "Bearer xxx" }
+    }
+  }
+}
+```
+
+- **stdio 传输**：通过 `command` + `args` 启动本地进程
+- **HTTP 传输**：通过 `url` 连接远程 SSE 端点
+- **禁用服务器**：添加 `"disabled": true` 跳过连接
+- **命名空间**：MCP 工具自动命名为 `mcp__{serverName}__{toolName}`，避免冲突
+- **权限**：MCP 工具遵循与内置工具相同的权限系统，可在 `permissions.allow` 中配置
+
+### REPL 命令
+
+- `/mcp` — 查看所有 MCP 服务器状态
+- `/mcp reload [name]` — 重连指定服务器（省略 name 则重连全部）
+
 ## 扩展
 
 ### 自定义技能
@@ -230,8 +267,9 @@ src/
 ├── cli/                  # CLI（参数解析、REPL、命令）
 ├── core/                 # 核心（Agent、压缩、模型分层、提示词）
 ├── backend/              # API 后端（Anthropic / OpenAI）
+├── mcp/                  # MCP 协议（客户端、管理器、传输、配置）
 ├── tools/                # 工具系统（定义、执行、权限）
-├── ui/                   # 终端 UI
+├── ui/                   # 终端 UI（StarDust 主题、语法高亮）
 ├── storage/              # 持久化（会话、记忆、文件追踪）
 └── extensions/           # 扩展（技能、子代理）
 ```

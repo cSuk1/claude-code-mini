@@ -134,6 +134,7 @@ export async function runRepl(agent: Agent) {
     } else {
       sigintCount++;
       if (sigintCount >= 2) {
+        agent.destroy();
         console.log("\nBye!\n");
         process.exit(0);
       }
@@ -156,6 +157,7 @@ export async function runRepl(agent: Agent) {
       return;
     }
     if (input === "exit" || input === "quit") {
+      agent.destroy();
       console.log("\nBye!\n");
       rl.close();
       process.exit(0);

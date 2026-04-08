@@ -19,11 +19,13 @@
 - **Dual Backend Support** — Compatible with both Anthropic (Claude) and OpenAI protocol APIs, switch with a single flag
 - **Three-Tier Model System** — pro (main chat) / lite (sub-agents) / mini (summarization), auto-routed by task complexity for cost optimization
 - **21 Built-in Tools** — File I/O, code search, shell execution, Git operations, web search, task management, and more
+- **MCP Protocol Support** — Connect external tool servers via Model Context Protocol with stdio and HTTP transports, automatic tool discovery and namespace isolation
 - **Sub-Agent System** — Built-in explore / plan / general agent types, plus custom agent support with isolated execution
 - **Skill Extensions** — Define reusable skills via `.ccmini/skills/` directory with inline and fork execution modes
 - **Context Compression** — 4-tier pipeline (budget → snip → microcompact → auto-compact), first 3 tiers at zero API cost
 - **Permission Management** — 5 permission modes with dangerous command detection and persistent rule-based policies
 - **Streaming Output** — Real-time streaming text with automatic parallel execution for parallel-safe tools
+- **StarDust Terminal Theme** — Beautiful terminal visual styles with built-in lightweight syntax highlighting (TS/JS, Python, JSON, Shell, Go, Rust, etc.)
 - **Session Persistence** — Auto-save/restore sessions with `--resume` support
 - **File Change Tracking** — Per-turn change recording with `/revert` for one-click undo
 - **Memory System** — 4-type persistent file-based memory (user / feedback / project / reference)
@@ -112,6 +114,7 @@ claude-code-mini --resume  # Resume last session
 | `/trace` | Show all file changes by turn |
 | `/revert` | Revert the last turn's file changes |
 | `/skills` | List available skills |
+| `/mcp [reload [name]]` | View MCP server status / reconnect a specific or all servers |
 | `/<skill-name>` | Invoke a user-defined skill |
 
 Tip: Press **Tab** after typing `/` to see all available commands and skills.
@@ -190,6 +193,40 @@ Configuration priority (high → low):
 
 Sub-agent auto-routing: explore → lite, plan → lite, general → pro, compact → mini.
 
+## MCP Protocol Support
+
+claude-code-mini supports connecting external tool servers via the [Model Context Protocol](https://modelcontextprotocol.io/), automatically discovering and registering tools.
+
+### Configuration
+
+Add `mcpServers` to `~/.ccmini/settings.json` or project-level `.ccmini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"]
+    },
+    "remote-api": {
+      "url": "https://mcp-server.example.com/sse",
+      "headers": { "Authorization": "Bearer xxx" }
+    }
+  }
+}
+```
+
+- **stdio transport**: Launch local process via `command` + `args`
+- **HTTP transport**: Connect to remote SSE endpoint via `url`
+- **Disable server**: Add `"disabled": true` to skip connection
+- **Namespacing**: MCP tools are automatically named `mcp__{serverName}__{toolName}` to avoid conflicts
+- **Permissions**: MCP tools follow the same permission system as built-in tools, configurable in `permissions.allow`
+
+### REPL Commands
+
+- `/mcp` — View all MCP server statuses
+- `/mcp reload [name]` — Reconnect a specific server (omit name to reconnect all)
+
 ## Extensions
 
 ### Custom Skills
@@ -230,8 +267,9 @@ src/
 ├── cli/                  # CLI (args, REPL, commands)
 ├── core/                 # Core (Agent, compression, model tiers, prompts)
 ├── backend/              # API backends (Anthropic / OpenAI)
+├── mcp/                  # MCP protocol (client, manager, transport, config)
 ├── tools/                # Tool system (definitions, executors, permissions)
-├── ui/                   # Terminal UI
+├── ui/                   # Terminal UI (StarDust theme, syntax highlighting)
 ├── storage/              # Persistence (sessions, memory, file tracker)
 └── extensions/           # Extensions (skills, sub-agents)
 ```

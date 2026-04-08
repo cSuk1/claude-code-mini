@@ -10,7 +10,31 @@ import { initModelTiers } from "./core/model-tiers.js";
 import { runConnectFlow } from "./cli/commands.js";
 import { MCPClientManager, loadMCPConfigs } from "./mcp/index.js";
 
+// Track agent for graceful shutdown
+let agent: Agent | undefined;
+
+async function gracefulShutdown(signal: string): Promise<void> {
+  if (agent) {
+    agent.destroy();
+    agent = undefined;
+  }
+  printInfo(`\nReceived ${signal}, shutting down gracefully.`);
+  process.exit(0);
+}
+
+function registerShutdownHandlers(): void {
+  process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+  process.on("beforeExit", () => {
+    if (agent) {
+      agent.destroy();
+      agent = undefined;
+    }
+  });
+}
+
 async function main() {
+  registerShutdownHandlers();
+
   const args = parseArgs();
 
   if (args.connect) {
@@ -30,7 +54,7 @@ async function main() {
     await mcpManager.init(mcpConfigs);
   }
 
-  const agent = new Agent({
+  agent = new Agent({
     permissionMode, model, thinking, maxTurns,
     apiBase: useOpenAI ? apiBase : undefined,
     anthropicBaseURL: !useOpenAI ? apiBase : undefined,
@@ -61,6 +85,9 @@ async function main() {
     } catch (e: any) {
       printError(e.message);
       process.exit(1);
+    } finally {
+      agent.destroy();
+      agent = undefined;
     }
   } else {
     await runRepl(agent);

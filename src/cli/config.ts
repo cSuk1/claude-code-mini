@@ -1,6 +1,7 @@
 import type { ParsedArgs } from "./args.js";
 import { printError } from "../ui/index.js";
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
+import { chmodSync } from "fs";
 import { join, dirname } from "path";
 import { homedir } from "os";
 
@@ -81,9 +82,15 @@ export function readOrCreateSettings(filePath: string): any {
 export function writeSettingsFile(filePath: string, data: any): void {
   const dir = dirname(filePath);
   if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
   writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  // Restrict file permissions to owner-only (rw-------) to protect API keys
+  try {
+    chmodSync(filePath, 0o600);
+  } catch {
+    // chmod may fail on some platforms (e.g. Windows), non-critical
+  }
 }
 
 /** User-level settings path */
