@@ -1,13 +1,13 @@
 import * as readline from "readline";
 import chalk from "chalk";
 import { Agent } from "../core/agent.js";
-import { printWelcome, printError, printInfo, showMenu, showQuestion, showFreeTextInput } from "../ui/index.js";
+import { printWelcome, printError, printInfo, showMenu, showQuestion, showFreeTextInput, gradientText } from "../ui/index.js";
 import { discoverSkills, resolveSkillPrompt, getSkillByName, executeSkill } from "../extensions/skills.js";
 import { CommandRegistry, registerBuiltinCommands } from "./commands.js";
 import { generatePermissionRule, savePermissionRule } from "../tools/tools.js";
 
 // The prompt string — must match what readline knows about so cursor math works.
-const PROMPT = "\n" + chalk.bold.cyanBright("> ");
+const PROMPT = "\n" + gradientText("❯ ", "#7dd3fc", "#c4b5fd");
 
 export async function runRepl(agent: Agent) {
   // ─── Build command registry ─────────────────────────────────

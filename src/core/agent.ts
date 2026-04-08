@@ -40,6 +40,9 @@ import {
   getTaskSpinnerLabel,
   printTaskSummary,
   printTokenUsage,
+  printUserMessage,
+  C,
+  gradientDivider,
 } from "../ui/index.js";
 
 const CONTEXT_WINDOW_RESERVED_TOKENS = 20000;
@@ -269,8 +272,12 @@ export class Agent {
             if (firstText) {
               if (!this.isSubAgent) {
                 this.hideSpinner();
+                // Print assistant header to separate from user bubble
+                const now = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+                console.log("");
+                console.log(C.brand("  ◇ Assistant") + C.mutedDim("  ·") + C.muted("  " + now));
+                console.log(gradientDivider(Math.min(process.stdout.columns || 50, 50)));
               }
-              this.emitText("\n");
               firstText = false;
             }
             content += chunk.content;

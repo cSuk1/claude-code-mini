@@ -1,9 +1,13 @@
-import { C } from "./colors.js";
+import { C, gradientText } from "./colors.js";
 
 export interface MenuOption {
   label: string;
   value: string;
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// Interactive Menu — Gradient-styled selection with smooth navigation
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 export async function showMenu(title: string, options: MenuOption[]): Promise<string | null> {
   if (options.length === 0) return null;
@@ -44,11 +48,21 @@ export async function showMenu(title: string, options: MenuOption[]): Promise<st
       }
       firstRender = false;
 
-      console.log(C.accent(`  ? ${title}`));
+      // Title with gradient accent
+      const titleGradient = gradientText(`  ◈ ${title}`, "#7dd3fc", "#c4b5fd");
+      console.log(titleGradient);
       options.forEach((opt, i) => {
-        const prefix = i === selected ? C.accent("❯ ") : "  ";
-        const num = C.muted(`${i + 1}. `);
-        console.log(prefix + num + opt.label);
+        if (i === selected) {
+          // Selected item — full accent with indicator
+          const indicator = gradientText("  ▸ ", "#7dd3fc", "#818cf8");
+          const num = C.brand(`${i + 1}. `);
+          console.log(indicator + num + C.bold(opt.label));
+        } else {
+          // Unselected item — muted
+          const indicator = C.mutedDim("    ");
+          const num = C.mutedDim(`${i + 1}. `);
+          console.log(indicator + num + C.muted(opt.label));
+        }
       });
     };
 
@@ -138,7 +152,8 @@ export async function showFreeTextInput(prompt: string): Promise<string> {
     let input = "";
 
     const render = () => {
-      process.stdout.write(`\r\x1b[K${C.accent("  ? ")}${prompt}: ${input}`);
+      const promptGradient = gradientText(`  ◈ ${prompt}`, "#7dd3fc", "#c4b5fd");
+      process.stdout.write(`\r\x1b[K${promptGradient}${C.muted(": ")}${C.accent(input)}`);
     };
 
     const onData = (data: Buffer) => {
@@ -173,7 +188,7 @@ export async function showFreeTextInput(prompt: string): Promise<string> {
     process.stdin.resume();
     process.stdin.on("data", onData);
 
-    console.log(C.accent(`  ? ${prompt}:`));
+    console.log(gradientText(`  ◈ ${prompt}:`, "#7dd3fc", "#c4b5fd"));
     render();
   });
 }
